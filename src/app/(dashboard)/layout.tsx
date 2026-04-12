@@ -15,6 +15,7 @@ import { useMyAttendance } from '@/lib/hooks/useAttendance'
 import { LiveTimer } from '@/components/attendance/LiveTimer'
 import { formatDuration } from '@/lib/utils/formatDuration'
 import { useLiveHours } from '@/lib/hooks/useLiveHours'
+import { UpcomingBirthdays } from '@/components/ui/BirthdayBanner'
 import { CommandPalette } from '@/components/ui/CommandPalette'
 import { Walkthrough } from '@/components/ui/Walkthrough'
 import { NotificationCenter } from '@/components/ui/NotificationCenter'
@@ -305,6 +306,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Mini Timer */}
       <SidebarTimer />
+
+      {/* Upcoming Birthdays */}
+      <div className="mx-3 mb-2">
+        <UpcomingBirthdays />
+      </div>
 
       {/* User info */}
       <div className="p-3 mx-3 mb-3 rounded-xl bg-gray-50 border border-gray-100">
