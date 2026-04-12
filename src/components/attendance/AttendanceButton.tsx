@@ -8,7 +8,7 @@ import { formatDuration } from '@/lib/utils/formatDuration'
 import { getSessionHours } from '@/lib/utils/liveSession'
 import type { AttendanceSession } from '@/types/attendance'
 
-const DOWNLOAD_URL = 'https://dtzl7r6jcvxb2.cloudfront.net/downloads/TaskFlowDesktop-Setup-1.0.0.exe'
+const DOWNLOAD_URL = 'https://dp2uotzxlo5a5.cloudfront.net/releases/v1.0.0/TaskFlowDesktop-Setup-1.0.0.exe'
 
 /* ═══ Grouped Task — merges multiple sessions of same task ═══ */
 interface GroupedTask {

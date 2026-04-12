@@ -93,7 +93,7 @@ function DesktopDownloadLink() {
   const os = getOS()
 
   useEffect(() => {
-    fetch('https://d32wbqjdb87hcf.cloudfront.net/releases/latest.json')
+    fetch('https://dp2uotzxlo5a5.cloudfront.net/releases/latest.json')
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data) setLatest(data) })
       .catch(() => {})
