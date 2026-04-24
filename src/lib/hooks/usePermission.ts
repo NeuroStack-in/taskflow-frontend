@@ -51,6 +51,17 @@ export interface SystemPermissions {
   canViewProgress: boolean
   canAssignTasks: boolean
   canApproveDayOffs: boolean
+  /**
+   * True while the /orgs/current/roles fetch is in flight. Every
+   * `canXxx` boolean above reflects the legacy role-based fallback
+   * during this window — accurate for the three built-in tiers
+   * (OWNER/ADMIN/MEMBER) but pessimistic for custom privileged roles,
+   * which would flash "no permission" if a page-gate used the
+   * booleans alone. Page gates should defer until `isLoading` is
+   * false OR the legacy fallback is known to be correct (e.g. when
+   * user.systemRole ∈ {OWNER, ADMIN, MEMBER}).
+   */
+  isLoading: boolean
 }
 
 /**
@@ -136,7 +147,10 @@ export function useSystemPermission(
   // While `useRoles` is loading, fall back to the hardcoded
   // isPrivileged check so the first paint isn't visibly degraded.
   // Once roles arrive, each boolean becomes an exact permission check
-  // against the tenant's live role record.
+  // against the tenant's live role record. `isLoading` surfaces the
+  // in-flight state so page gates can defer — otherwise a user whose
+  // custom role grants `user.list` would flash "no permission" before
+  // the roles fetch resolves (the fallback only knows OWNER/ADMIN).
   if (!sysPerms) {
     const priv = isPrivilegedFallback(systemRole)
     return {
@@ -146,6 +160,7 @@ export function useSystemPermission(
       canViewProgress: priv,
       canAssignTasks: priv,
       canApproveDayOffs: priv,
+      isLoading: true,
     }
   }
 
@@ -158,6 +173,7 @@ export function useSystemPermission(
     canViewProgress: has('user.progress.view'),
     canAssignTasks: has('task.assign') || has('task.manage'),
     canApproveDayOffs: has('dayoff.approve'),
+    isLoading: false,
   }
 }
 
