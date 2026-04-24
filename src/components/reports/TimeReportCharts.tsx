@@ -16,7 +16,7 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
+  Sector,
 } from 'recharts'
 
 type Period = 'daily' | 'weekly' | 'monthly'
@@ -26,6 +26,30 @@ const COLORS = [
   '#f472b6', '#fb7185', '#f97316', '#facc15',
   '#34d399', '#2dd4bf', '#38bdf8', '#818cf8',
 ]
+
+/** Recharts v3 removed activeIndex/activeShape from Pie's public types but still supports them at runtime. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function pieInteractiveProps(activeIndex: number): any {
+  return {
+    activeIndex,
+    activeShape: (props: {
+      cx: number; cy: number; innerRadius: number; outerRadius: number
+      startAngle: number; endAngle: number; fill: string
+    }) => (
+      <g>
+        <Sector
+          cx={props.cx}
+          cy={props.cy}
+          innerRadius={props.innerRadius}
+          outerRadius={props.outerRadius + 6}
+          startAngle={props.startAngle}
+          endAngle={props.endAngle}
+          fill={props.fill}
+        />
+      </g>
+    ),
+  }
+}
 
 function getDateRange(period: Period, offset: number): { start: string; end: string; label: string } {
   const now = new Date()
@@ -97,6 +121,7 @@ export function TimeReportCharts({
 }: TimeReportChartsProps) {
   const [period, setPeriod] = useState<Period>('weekly')
   const [offset, setOffset] = useState(0)
+  const [activePieIndex, setActivePieIndex] = useState<number>(-1)
 
   const { start, end, label } = useMemo(() => getDateRange(period, offset), [period, offset])
   const { data: rawRecords, isLoading } = useAttendanceReport(start, end)
@@ -224,27 +249,83 @@ export function TimeReportCharts({
 
   const hasData = records.length > 0
 
-  // Custom tooltip for stacked bar
-  const CustomBarTooltip = ({ active, payload, label: tipLabel }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) => {
+  // Custom tooltip for the stacked bar chart.
+  //
+  // Design notes:
+  // - Compact glass card (w-64) so it doesn't blanket the chart behind it.
+  // - Items sorted by value descending — biggest contributors first.
+  // - Only the top 6 show; a trailing "+N more (Xh)" line rolls up the rest
+  //   so a 15-project day still produces a reasonably-sized tooltip.
+  // - Left colour-stripe on each row (not a dot) — easier to match against
+  //   the colour-coded segments of the stacked bar.
+  // - Header shows the day label AND the stacked total on one line to save
+  //   vertical space; that also means when only one project is shown there
+  //   is no awkward duplicate-total row.
+  const CustomBarTooltip = ({
+    active,
+    payload,
+    label: tipLabel,
+  }: {
+    active?: boolean
+    payload?: Array<{ name: string; value: number; color: string }>
+    label?: string
+  }) => {
     if (!active || !payload?.length) return null
-    const items = payload.filter((p) => p.value > 0)
+    const items = payload
+      .filter((p) => p.value > 0)
+      .sort((a, b) => b.value - a.value)
     if (items.length === 0) return null
+
     const total = items.reduce((s, p) => s + p.value, 0)
+    const MAX_ROWS = 6
+    const visible = items.slice(0, MAX_ROWS)
+    const hidden = items.slice(MAX_ROWS)
+    const hiddenTotal = hidden.reduce((s, p) => s + p.value, 0)
+
     return (
-      <div className="bg-white rounded-xl border border-gray-200 shadow-lg p-3 text-sm">
-        <p className="font-semibold text-gray-800 mb-1.5">{tipLabel}</p>
-        {items.map((p) => (
-          <div key={p.name} className="flex items-center gap-2 py-0.5">
-            <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
-            <span className="text-gray-600 flex-1">{p.name}</span>
-            <span className="font-medium text-gray-800 tabular-nums">{formatDuration(p.value)}</span>
-          </div>
-        ))}
-        {items.length > 1 && (
-          <div className="border-t border-gray-100 mt-1.5 pt-1.5 flex justify-between">
-            <span className="font-semibold text-gray-700">Total</span>
-            <span className="font-bold text-indigo-700 tabular-nums">{formatDuration(total)}</span>
-          </div>
+      <div className="w-64 rounded-xl border border-white/60 bg-white/85 p-3 text-[12px] shadow-[0_20px_40px_-16px_rgba(15,23,42,0.28)] backdrop-blur-xl dark:border-white/10 dark:bg-neutral-900/85">
+        {/* Header: date + total on the same row when there's a total worth
+            showing; otherwise just the date. */}
+        <div className="mb-2 flex items-baseline justify-between gap-3 border-b border-border/60 pb-2">
+          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">
+            {tipLabel}
+          </span>
+          {items.length > 1 && (
+            <span className="font-mono text-sm font-bold tabular-nums text-primary">
+              {formatDuration(total)}
+            </span>
+          )}
+        </div>
+
+        {/* Rows: coloured left-stripe + name + value */}
+        <ul className="space-y-1">
+          {visible.map((p) => (
+            <li
+              key={p.name}
+              className="flex items-center gap-2 rounded-md py-0.5"
+            >
+              <span
+                aria-hidden
+                className="h-3 w-[3px] shrink-0 rounded-full"
+                style={{ backgroundColor: p.color }}
+              />
+              <span className="min-w-0 flex-1 truncate text-foreground/85">
+                {p.name}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">
+                {formatDuration(p.value)}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        {hidden.length > 0 && (
+          <p className="mt-2 border-t border-border/60 pt-1.5 text-[11px] text-muted-foreground">
+            +{hidden.length} more ·{' '}
+            <span className="font-mono tabular-nums">
+              {formatDuration(hiddenTotal)}
+            </span>
+          </p>
         )}
       </div>
     )
@@ -255,16 +336,16 @@ export function TimeReportCharts({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">{title}</h2>
-          <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>
+          <h2 className="text-xl font-bold text-foreground">{title}</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>
         </div>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+        <div className="flex items-center gap-1 bg-muted rounded-xl p-1">
           {(['daily', 'weekly', 'monthly'] as Period[]).map((p) => (
             <button
               key={p}
               onClick={() => { setPeriod(p); setOffset(0) }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                period === p ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                period === p ? 'bg-card text-indigo-700 shadow-sm' : 'text-muted-foreground hover:text-foreground/85'
               }`}
             >
               {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -274,18 +355,18 @@ export function TimeReportCharts({
       </div>
 
       {/* Date Navigator */}
-      <div className="flex items-center justify-between bg-white rounded-2xl border border-gray-100 px-5 py-3 shadow-sm">
-        <button onClick={() => setOffset((o) => o - 1)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+      <div className="flex items-center justify-between bg-card rounded-2xl border border-border px-5 py-3 shadow-sm">
+        <button onClick={() => setOffset((o) => o - 1)} className="p-2 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground/85 transition-colors">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
         </button>
         <div className="text-center">
-          <p className="text-sm font-semibold text-gray-900">{label}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">{start === end ? start : `${start} to ${end}`}</p>
+          <p className="text-sm font-semibold text-foreground">{label}</p>
+          <p className="text-[11px] text-muted-foreground/70 mt-0.5">{start === end ? start : `${start} to ${end}`}</p>
         </div>
         <button
           onClick={() => setOffset((o) => o + 1)}
           disabled={offset >= 0}
-          className={`p-2 rounded-xl transition-colors ${offset >= 0 ? 'text-gray-200 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'}`}
+          className={`p-2 rounded-xl transition-colors ${offset >= 0 ? 'text-gray-200 cursor-not-allowed' : 'hover:bg-muted text-muted-foreground hover:text-foreground/85'}`}
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
         </button>
@@ -294,14 +375,14 @@ export function TimeReportCharts({
       {isLoading ? (
         <div className="flex items-center justify-center h-64"><Spinner size="lg" /></div>
       ) : !hasData ? (
-        <div className="flex flex-col items-center justify-center h-64 bg-white rounded-2xl border border-gray-100">
+        <div className="flex flex-col items-center justify-center h-64 bg-card rounded-2xl border border-border">
           <svg className="w-12 h-12 text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-          <p className="text-sm text-gray-400">No time data for this period</p>
+          <p className="text-sm text-muted-foreground/70">No time data for this period</p>
         </div>
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 stagger-up">
             <SummaryCard label="Total Hours" value={formatDuration(totalHours)} icon={<ClockIcon />} color="indigo" />
             <SummaryCard label="Team Members" value={String(totalMembers)} icon={<UsersIcon />} color="violet" />
           </div>
@@ -309,84 +390,168 @@ export function TimeReportCharts({
           {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Stacked Bar Chart — Hours per day, split by project/task */}
-            <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
-              <h3 className="text-sm font-bold text-gray-700 mb-4">
-                {categoryKey === 'project' ? 'Hours by Project' : 'Hours by Task'} — {period === 'daily' ? 'Per Member' : 'Per Day'}
-              </h3>
-              <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={stackedBarData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#64748b' }} interval={period === 'monthly' ? 2 : 0} />
-                  <YAxis tick={{ fontSize: 12, fill: '#94a3b8' }} tickFormatter={(v: number) => `${v}h`} />
-                  <Tooltip content={<CustomBarTooltip />} />
-                  {allCategories.map((cat) => (
-                    <Bar key={cat} dataKey={cat} stackId="hours" fill={colorMap[cat]} radius={[0, 0, 0, 0]} maxBarSize={40} />
+            <div className="relative bg-card rounded-2xl border border-border p-6 shadow-sm overflow-hidden">
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/30 to-transparent" aria-hidden />
+              <div className="flex items-start justify-between mb-5 gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-foreground/90 tracking-tight">
+                    {categoryKey === 'project' ? 'Hours by project' : 'Hours by task'}
+                    <span className="text-muted-foreground font-normal"> — {period === 'daily' ? 'per member' : 'per day'}</span>
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+                    Across {allCategories.length} {allCategories.length === 1 ? categoryKey : categoryKey + 's'}
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground/70">Total</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums leading-tight">{formatDuration(totalHours)}</p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={stackedBarData} margin={{ left: -8, right: 8, top: 8, bottom: 0 }} barCategoryGap="22%">
+                  <defs>
+                    {allCategories.map((cat) => (
+                      <linearGradient key={cat} id={`bargrad-${cat.replace(/[^a-zA-Z0-9]/g, '_')}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={colorMap[cat]} stopOpacity={0.95} />
+                        <stop offset="100%" stopColor={colorMap[cat]} stopOpacity={0.55} />
+                      </linearGradient>
+                    ))}
+                  </defs>
+                  <CartesianGrid strokeDasharray="4 6" stroke="currentColor" strokeOpacity={0.08} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'currentColor', opacity: 0.6 }} interval={period === 'monthly' ? 2 : 0} axisLine={false} tickLine={false} dy={6} />
+                  <YAxis tick={{ fontSize: 11, fill: 'currentColor', opacity: 0.55 }} tickFormatter={(v: number) => formatDuration(v)} axisLine={false} tickLine={false} width={58} />
+                  <Tooltip cursor={{ fill: 'currentColor', fillOpacity: 0.05 }} content={<CustomBarTooltip />} />
+                  {allCategories.map((cat, i) => (
+                    <Bar
+                      key={cat}
+                      dataKey={cat}
+                      stackId="hours"
+                      fill={`url(#bargrad-${cat.replace(/[^a-zA-Z0-9]/g, '_')})`}
+                      radius={i === allCategories.length - 1 ? [6, 6, 0, 0] : [0, 0, 0, 0]}
+                      maxBarSize={44}
+                    />
                   ))}
                 </BarChart>
               </ResponsiveContainer>
-              {/* Legend */}
-              <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t border-gray-100">
-                {allCategories.map((cat) => (
-                  <div key={cat} className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorMap[cat] }} />
-                    <span className="text-xs text-gray-600">{cat}</span>
-                  </div>
-                ))}
+              {/* Legend with percentages */}
+              <div className="flex flex-wrap gap-x-4 gap-y-2 mt-5 pt-4 border-t border-border/60">
+                {allCategories.map((cat) => {
+                  const catTotal = pieData.find((p) => p.name === cat)?.value ?? 0
+                  const pct = totalHours > 0 ? Math.round((catTotal / totalHours) * 100) : 0
+                  return (
+                    <div key={cat} className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorMap[cat] }} />
+                      <span className="text-xs text-foreground/85 font-medium">{cat}</span>
+                      <span className="text-[10px] text-muted-foreground/70 tabular-nums font-semibold">{pct}%</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
             {/* Pie Chart */}
-            <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
-              <h3 className="text-sm font-bold text-gray-700 mb-4">{pieLabel}</h3>
+            <div className="relative bg-card rounded-2xl border border-border p-6 shadow-sm overflow-hidden">
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-500/30 to-transparent" aria-hidden />
+              <div className="flex items-start justify-between mb-5 gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-foreground/90 tracking-tight">Distribution</h3>
+                  <p className="text-[11px] text-muted-foreground/70 mt-0.5">{pieLabel}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground/70">Entries</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums leading-tight">{pieData.length}</p>
+                </div>
+              </div>
               {pieData.length === 0 ? (
-                <div className="flex items-center justify-center h-[320px]">
-                  <p className="text-sm text-gray-300">No data available</p>
+                <div className="flex items-center justify-center h-[280px]">
+                  <p className="text-sm text-muted-foreground/50">No data available</p>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={320}>
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={110}
-                      paddingAngle={3}
-                      dataKey="value"
-                      stroke="none"
-                    >
-                      {pieData.map((entry) => (
-                        <Cell key={entry.name} fill={colorMap[entry.name] || COLORS[0]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      content={({ active, payload }) => {
-                        if (!active || !payload?.length) return null
-                        const entry = payload[0]
-                        const val = Number(entry.value)
-                        const pct = totalHours > 0 ? Math.round((val / totalHours) * 100) : 0
-                        return (
-                          <div className="bg-white rounded-xl border border-gray-200 shadow-lg p-3 text-sm">
-                            <div className="flex items-center gap-2 mb-1">
-                              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: entry.payload?.fill }} />
-                              <span className="font-semibold text-gray-800">{entry.name}</span>
-                            </div>
-                            <p className="text-gray-600">{formatDuration(val)}</p>
-                            <p className="text-indigo-600 font-bold">{pct}%</p>
+                <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4 items-center">
+                  <div className="relative">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={64}
+                          outerRadius={98}
+                          paddingAngle={pieData.length > 1 ? 3 : 0}
+                          dataKey="value"
+                          stroke="none"
+                          onMouseEnter={(_, i) => setActivePieIndex(i)}
+                          onMouseLeave={() => setActivePieIndex(-1)}
+                          {...(pieInteractiveProps(activePieIndex))}
+                        >
+                          {pieData.map((entry) => (
+                            <Cell key={entry.name} fill={colorMap[entry.name] || COLORS[0]} />
+                          ))}
+                        </Pie>
+                        {/* No <Tooltip> — the donut's centre label and the
+                            highlighted legend row on the right already
+                            communicate the hovered slice. A floating
+                            tooltip on top of the centre label produced a
+                            visible overlap (duplicate values rendered on
+                            top of each other). */}
+                      </PieChart>
+                    </ResponsiveContainer>
+                    {/* Center label — shows totals at rest, hovered-slice
+                        details on hover. Replaces the recharts Tooltip
+                        (which collided with this card). */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-[10px] uppercase tracking-[0.16em] font-semibold text-muted-foreground/70">
+                        {activePieIndex >= 0 ? 'Selected' : 'Total'}
+                      </span>
+                      <span className="mt-1 text-base font-bold tabular-nums leading-tight text-foreground">
+                        {activePieIndex >= 0
+                          ? formatDuration(pieData[activePieIndex].value)
+                          : formatDuration(totalHours)}
+                      </span>
+                      {activePieIndex >= 0 && (
+                        <>
+                          <span className="mt-0.5 font-mono text-xs font-bold tabular-nums text-primary">
+                            {totalHours > 0
+                              ? Math.round(
+                                  (pieData[activePieIndex].value / totalHours) *
+                                    100,
+                                )
+                              : 0}
+                            %
+                          </span>
+                          <span className="mt-1 max-w-[110px] truncate px-2 text-[10px] text-muted-foreground/80">
+                            {pieData[activePieIndex].name}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {/* Custom legend */}
+                  <div className="space-y-1 max-h-[260px] overflow-y-auto pr-1">
+                    {pieData.map((entry, i) => {
+                      const pct = totalHours > 0 ? Math.round((entry.value / totalHours) * 100) : 0
+                      const isActive = activePieIndex === i
+                      return (
+                        <div
+                          key={entry.name}
+                          onMouseEnter={() => setActivePieIndex(i)}
+                          onMouseLeave={() => setActivePieIndex(-1)}
+                          className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors cursor-default ${isActive ? 'bg-muted/70' : 'hover:bg-muted/40'}`}
+                        >
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full flex-shrink-0 transition-transform ${isActive ? 'scale-125' : ''}`}
+                            style={{ backgroundColor: colorMap[entry.name] || COLORS[0] }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-foreground/90 truncate">{entry.name}</p>
+                            <p className="text-[10px] text-muted-foreground/70 tabular-nums mt-0.5">{formatDuration(entry.value)}</p>
                           </div>
-                        )
-                      }}
-                    />
-                    <Legend
-                      layout="vertical"
-                      align="right"
-                      verticalAlign="middle"
-                      iconType="circle"
-                      iconSize={8}
-                      formatter={(value: string) => <span className="text-xs text-gray-600">{value}</span>}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                          <span className="text-xs font-bold text-foreground/85 tabular-nums">{pct}%</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -456,11 +621,11 @@ function MemberBreakdown({ records, totalHours }: { records: Attendance[]; total
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-100">
-        <h3 className="text-sm font-bold text-gray-700">Member Breakdown</h3>
+    <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-border">
+        <h3 className="text-sm font-bold text-foreground/85">Member Breakdown</h3>
       </div>
-      <div className="divide-y divide-gray-50">
+      <div className="divide-y divide-border/60">
         {rows.map((row, i) => {
           const isOpen = expanded.has(row.userId)
           const pct = totalHours > 0 ? Math.round((row.hours / totalHours) * 100) : 0
@@ -469,33 +634,33 @@ function MemberBreakdown({ records, totalHours }: { records: Attendance[]; total
               {/* Summary row */}
               <button
                 onClick={() => toggle(row.userId)}
-                className="w-full flex items-center gap-4 px-6 py-3.5 hover:bg-gray-50/50 transition-colors text-left"
+                className="w-full flex items-center gap-4 px-6 py-3.5 hover:bg-muted/30 transition-colors text-left"
               >
-                <svg className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className={`w-4 h-4 text-muted-foreground/70 flex-shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
                 <div className="flex items-center gap-2 min-w-[140px]">
                   <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                  <span className="text-sm font-medium text-gray-800">{row.name}</span>
+                  <span className="text-sm font-medium text-foreground/95">{row.name}</span>
                 </div>
-                <span className="text-sm font-semibold text-gray-700 tabular-nums min-w-[80px] text-right">{formatDuration(row.hours)}</span>
+                <span className="text-sm font-semibold text-foreground/85 tabular-nums min-w-[80px] text-right">{formatDuration(row.hours)}</span>
                 <div className="flex-1 flex items-center gap-2">
-                  <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
+                  <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
                     <div
                       className="h-full rounded-full transition-all duration-500"
                       style={{ width: `${pct}%`, backgroundColor: COLORS[i % COLORS.length] }}
                     />
                   </div>
-                  <span className="text-[11px] text-gray-400 tabular-nums w-10 text-right">{pct}%</span>
+                  <span className="text-[11px] text-muted-foreground/70 tabular-nums w-10 text-right">{pct}%</span>
                 </div>
               </button>
 
               {/* Expanded session details */}
               {isOpen && (
-                <div className="bg-gray-50/70 px-6 pb-4">
+                <div className="bg-muted/40 px-6 pb-4">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">
+                      <tr className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-bold">
                         <th className="text-left py-2 pr-3">Date</th>
                         <th className="text-left py-2 pr-3">Project</th>
                         <th className="text-left py-2 pr-3">Task</th>
@@ -504,22 +669,22 @@ function MemberBreakdown({ records, totalHours }: { records: Attendance[]; total
                         <th className="text-right py-2">Duration</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
+                    <tbody className="divide-y divide-border/80">
                       {row.sessions
                         .sort((a, b) => new Date(a.signInAt).getTime() - new Date(b.signInAt).getTime())
                         .map((s, j) => (
-                        <tr key={j} className="hover:bg-white/60 transition-colors">
-                          <td className="py-2 pr-3 text-gray-600 whitespace-nowrap">{formatDate(s.date)}</td>
+                        <tr key={j} className="hover:bg-card/60 transition-colors">
+                          <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{formatDate(s.date)}</td>
                           <td className="py-2 pr-3">
                             <span className="inline-flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
-                              <span className="text-gray-700 font-medium">{s.projectName}</span>
+                              <span className="text-foreground/85 font-medium">{s.projectName}</span>
                             </span>
                           </td>
-                          <td className="py-2 pr-3 text-gray-600">{s.taskTitle}</td>
-                          <td className="py-2 pr-3 text-gray-500 font-mono tabular-nums">{formatTime(s.signInAt)}</td>
-                          <td className="py-2 pr-3 text-gray-500 font-mono tabular-nums">{s.signOutAt ? formatTime(s.signOutAt) : <span className="text-emerald-600 font-medium">Active</span>}</td>
-                          <td className="py-2 text-right font-semibold text-gray-700 tabular-nums">{s.hours != null ? formatDuration(s.hours) : '—'}</td>
+                          <td className="py-2 pr-3 text-muted-foreground">{s.taskTitle}</td>
+                          <td className="py-2 pr-3 text-muted-foreground font-mono tabular-nums">{formatTime(s.signInAt)}</td>
+                          <td className="py-2 pr-3 text-muted-foreground font-mono tabular-nums">{s.signOutAt ? formatTime(s.signOutAt) : <span className="text-emerald-600 font-medium">Active</span>}</td>
+                          <td className="py-2 text-right font-semibold text-foreground/85 tabular-nums">{s.hours != null ? formatDuration(s.hours) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -546,12 +711,12 @@ function SummaryCard({ label, value, icon, color }: { label: string; value: stri
     violet: 'text-violet-700',
   }
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+    <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
       <div className="flex items-center gap-3 mb-3">
         <div className={`h-9 w-9 rounded-xl ${gradients[color]} flex items-center justify-center shadow-sm text-white`}>
           {icon}
         </div>
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{label}</p>
+        <p className="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">{label}</p>
       </div>
       <p className={`text-2xl font-bold ${textColors[color]} tracking-tight`}>{value}</p>
     </div>

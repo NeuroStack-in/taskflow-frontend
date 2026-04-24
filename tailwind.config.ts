@@ -6,15 +6,70 @@ const config: Config = {
     './src/**/*.{ts,tsx}',
   ],
   theme: {
+    container: {
+      center: true,
+      padding: '2rem',
+      screens: {
+        '2xl': '1400px',
+      },
+    },
     extend: {
+      fontFamily: {
+        sans: ['var(--font-outfit)', 'system-ui', 'sans-serif'],
+      },
       colors: {
-        sidebar: {
-          DEFAULT: '#ffffff',
-          hover: '#f8f8fb',
-          active: '#eef2ff',
-          border: '#ebebf0',
-          muted: '#8b8fa7',
+        // ─── Shadcn semantic tokens (HSL, driven by CSS vars) ───
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        destructive: {
+          DEFAULT: 'hsl(var(--destructive))',
+          foreground: 'hsl(var(--destructive-foreground))',
         },
+        muted: {
+          DEFAULT: 'hsl(var(--muted))',
+          foreground: 'hsl(var(--muted-foreground))',
+        },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
+        card: {
+          DEFAULT: 'hsl(var(--card))',
+          foreground: 'hsl(var(--card-foreground))',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
+        },
+        // ─── Per-tenant brand tokens (RGB triplets, runtime-overridden) ───
+        // Keep primary/accent as RGB triplets so TenantProvider can swap
+        // them at runtime without restyling every component.
+        primary: {
+          DEFAULT: 'rgb(var(--color-primary) / <alpha-value>)',
+          foreground: 'rgb(var(--color-primary-fg) / <alpha-value>)',
+          fg: 'rgb(var(--color-primary-fg) / <alpha-value>)',
+        },
+        accent: {
+          DEFAULT: 'rgb(var(--color-accent) / <alpha-value>)',
+          foreground: 'rgb(var(--color-accent-fg) / <alpha-value>)',
+          fg: 'rgb(var(--color-accent-fg) / <alpha-value>)',
+        },
+        sidebar: {
+          DEFAULT: 'hsl(var(--sidebar-background))',
+          foreground: 'hsl(var(--sidebar-foreground))',
+          hover: 'hsl(var(--sidebar-hover))',
+          active: 'hsl(var(--sidebar-active))',
+          border: 'hsl(var(--sidebar-border))',
+          muted: 'hsl(var(--sidebar-muted))',
+        },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
       },
       boxShadow: {
         'glass': '0 4px 30px rgba(0, 0, 0, 0.06)',
@@ -26,6 +81,14 @@ const config: Config = {
         'elevated': '0 8px 30px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.03)',
       },
       keyframes: {
+        'accordion-down': {
+          from: { height: '0' },
+          to: { height: 'var(--radix-accordion-content-height)' },
+        },
+        'accordion-up': {
+          from: { height: 'var(--radix-accordion-content-height)' },
+          to: { height: '0' },
+        },
         'fade-in': {
           '0%': { opacity: '0', transform: 'translateY(8px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
@@ -54,8 +117,34 @@ const config: Config = {
           '0%, 100%': { transform: 'translateY(0)' },
           '50%': { transform: 'translateY(-6px)' },
         },
+        'float-lg': {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-18px)' },
+        },
+        'shimmer': {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        // Slow wandering for decorative blobs so hero doesn't feel flat.
+        'drift': {
+          '0%, 100%': { transform: 'translate(0, 0) scale(1)' },
+          '33%': { transform: 'translate(30px, -20px) scale(1.06)' },
+          '66%': { transform: 'translate(-20px, 25px) scale(0.97)' },
+        },
+        // Very slow rotation for background halos.
+        'slow-spin': {
+          '0%': { transform: 'rotate(0deg)' },
+          '100%': { transform: 'rotate(360deg)' },
+        },
+        // Typewriter-style blink for demo cursors.
+        'blink': {
+          '0%, 49%': { opacity: '1' },
+          '50%, 100%': { opacity: '0' },
+        },
       },
       animation: {
+        'accordion-down': 'accordion-down 0.2s ease-out',
+        'accordion-up': 'accordion-up 0.2s ease-out',
         'fade-in': 'fade-in 0.4s ease-out forwards',
         'fade-in-delay-1': 'fade-in 0.4s ease-out 0.05s forwards',
         'fade-in-delay-2': 'fade-in 0.4s ease-out 0.1s forwards',
@@ -67,13 +156,20 @@ const config: Config = {
         'gradient-shift': 'gradient-shift 8s ease infinite',
         'pulse-soft': 'pulse-soft 2s ease-in-out infinite',
         'float': 'float 3s ease-in-out infinite',
+        'float-lg': 'float-lg 6s ease-in-out infinite',
+        'shimmer': 'shimmer 2s linear infinite',
+        'drift-slow': 'drift 14s ease-in-out infinite',
+        'drift-slower': 'drift 22s ease-in-out infinite',
+        'slow-spin': 'slow-spin 40s linear infinite',
+        'blink': 'blink 1s steps(1) infinite',
       },
       backdropBlur: {
         xs: '2px',
       },
     },
   },
-  plugins: [],
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  plugins: [require('tailwindcss-animate')],
 }
 
 export default config

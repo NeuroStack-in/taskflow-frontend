@@ -1,67 +1,82 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth/AuthProvider'
-import { useUsers, useCreateUser, useDeleteUser, useUpdateUserRole, useUpdateUserDepartment, useUserProgress } from '@/lib/hooks/useUsers'
+import {
+  useUsers,
+  useCreateUser,
+  useDeleteUser,
+  useUpdateUserRole,
+  useUserProgress,
+} from '@/lib/hooks/useUsers'
 import { useTodayAttendance } from '@/lib/hooks/useAttendance'
+import { useAllDayOffs } from '@/lib/hooks/useDayOffs'
 import { useSystemPermission } from '@/lib/hooks/usePermission'
+import { useUrlParam } from '@/lib/hooks/useUrlState'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
-import { PasswordInput } from '@/components/ui/PasswordInput'
 import { Spinner } from '@/components/ui/Spinner'
 import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { DatePicker } from '@/components/ui/DatePicker'
 import { Avatar } from '@/components/ui/AvatarUpload'
-import { FilterSelect } from '@/components/ui/FilterSelect'
-import { useAllDayOffs } from '@/lib/hooks/useDayOffs'
+import { Progress } from '@/components/ui/Progress'
+import { Alert, AlertDescription } from '@/components/ui/Alert'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { useConfirm } from '@/components/ui/ConfirmDialog'
+import { useToast } from '@/components/ui/Toast'
+import { AlertCircle, UserPlus, Users as UsersIcon } from 'lucide-react'
+import { LiveDot } from '@/components/ui/LiveDot'
+import {
+  UsersToolbar,
+  type UsersScope,
+  type UsersSort,
+} from '@/components/admin/UsersToolbar'
+import { UserStatStrip } from '@/components/admin/UserStatStrip'
+import { RoleDropdown, ROLE_STYLES } from '@/components/admin/RoleDropdown'
+import { UserActionsMenu } from '@/components/admin/UserActionsMenu'
+import { BulkImportUsersModal } from '@/components/admin/BulkImportUsersModal'
+import { orgsApi } from '@/lib/api/orgsApi'
+import { buildCsvName } from '@/lib/utils/csvFilename'
+import { getLocalToday } from '@/lib/utils/date'
 import type { User } from '@/types/user'
-
-const ROLE_COLORS: Record<string, string> = {
-  OWNER: 'bg-purple-100 text-purple-800',
-  ADMIN: 'bg-red-100 text-red-800',
-  MEMBER: 'bg-blue-100 text-blue-800',
-}
-
-type TabType = 'ADMIN' | 'MEMBER'
-type SortOption = 'name' | 'role' | 'department' | 'joined'
+import type { Attendance } from '@/types/attendance'
 
 export default function UsersPage() {
   const { user: currentUser } = useAuth()
   const systemPerms = useSystemPermission(currentUser?.systemRole)
-  const { data: users, isLoading } = useUsers()
+  const { data: users, isLoading, error: usersError } = useUsers()
   const { data: todayAttendance } = useTodayAttendance()
   const { data: allDayOffs } = useAllDayOffs()
   const createUserMutation = useCreateUser()
   const deleteUserMutation = useDeleteUser()
   const updateRole = useUpdateUserRole()
-  const updateDept = useUpdateUserDepartment()
+  const confirm = useConfirm()
+  const toast = useToast()
+  const queryClient = useQueryClient()
 
   const [showAddUser, setShowAddUser] = useState(false)
-  const [selectedUser, setSelectedUser] = useState<User | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
+  const [showInvite, setShowInvite] = useState(false)
+  const [showBulkImport, setShowBulkImport] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<'admin' | 'member'>('member')
+  const [inviteSending, setInviteSending] = useState(false)
+  const [inviteError, setInviteError] = useState('')
   const [progressUser, setProgressUser] = useState<string | null>(null)
   const [viewUser, setViewUser] = useState<User | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [deptFilter, setDeptFilter] = useState<string>('ALL')
-  const [sortBy, setSortBy] = useState<SortOption>('name')
+  const [searchQuery, setSearchQuery] = useUrlParam<string>('q', '')
+  const [deptFilter, setDeptFilter] = useUrlParam<string>('dept', 'ALL')
+  const [sortBy, setSortBy] = useUrlParam<UsersSort>('sort', 'name')
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<TabType>('ADMIN')
 
-  // Online users (currently signed in)
-  const onlineUserIds = useMemo(() => {
-    const set = new Set<string>()
-    for (const a of todayAttendance ?? []) { if (a.status === 'SIGNED_IN') set.add(a.userId) }
-    return set
-  }, [todayAttendance])
-
-  // Department counts
-  const deptCounts = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const u of users ?? []) { const d = u.department || 'Unassigned'; map.set(d, (map.get(d) ?? 0) + 1) }
-    return map
-  }, [users])
+  const isOwner = currentUser?.systemRole === 'OWNER'
+  const [scope, setScope] = useUrlParam<UsersScope>(
+    'scope',
+    isOwner ? 'management' : 'members'
+  )
 
   // Form state
   const [newEmail, setNewEmail] = useState('')
@@ -70,74 +85,132 @@ export default function UsersPage() {
   const [newDepartment, setNewDepartment] = useState('')
   const [newDateOfJoining, setNewDateOfJoining] = useState('')
 
-  if (!systemPerms.canManageUsers) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-gray-500">You don&apos;t have permission to view this page.</p>
-      </div>
-    )
-  }
+  // Online users + attendance-by-userId for "last seen"
+  const { onlineUserIds, attendanceByUserId } = useMemo(() => {
+    const online = new Set<string>()
+    const byId = new Map<string, Attendance>()
+    for (const a of todayAttendance ?? []) {
+      byId.set(a.userId, a)
+      if (a.status === 'SIGNED_IN') online.add(a.userId)
+    }
+    return { onlineUserIds: online, attendanceByUserId: byId }
+  }, [todayAttendance])
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Spinner />
-      </div>
-    )
-  }
+  // Scope-filtered users (admin ↔ member toggle).
+  // Management covers OWNER + ADMIN — the owner IS management and should
+  // appear under this tab, otherwise a fresh workspace reads as empty.
+  const allVisibleUsers = useMemo(() => {
+    const list = users ?? []
+    if (!isOwner) return list.filter((u) => u.systemRole === 'MEMBER')
+    return scope === 'management'
+      ? list.filter(
+          (u) => u.systemRole === 'ADMIN' || u.systemRole === 'OWNER',
+        )
+      : list.filter((u) => u.systemRole === 'MEMBER')
+  }, [users, isOwner, scope])
 
-  const isTopTier = currentUser?.systemRole === 'OWNER'
-  const isOwner = currentUser?.systemRole === 'OWNER'
+  // Department list is derived from ALL non-OWNER users so switching scope
+  // never makes departments disappear. Counts reflect the current scope —
+  // if a department has zero users in the current view it's hidden as noise.
+  const departments = useMemo(() => {
+    const allRelevant = (users ?? []).filter((u) => u.systemRole !== 'OWNER')
+    const allDepts = new Set<string>()
+    for (const u of allRelevant) {
+      allDepts.add(u.department || 'Unassigned')
+    }
+    const scopedCount = new Map<string, number>()
+    for (const u of allVisibleUsers) {
+      const d = u.department || 'Unassigned'
+      scopedCount.set(d, (scopedCount.get(d) ?? 0) + 1)
+    }
+    return Array.from(allDepts)
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, count: scopedCount.get(value) ?? 0 }))
+      .filter((d) => d.count > 0 || d.value === deptFilter)
+  }, [users, allVisibleUsers, deptFilter])
 
-  // Build a userId -> name map for resolving "created by"
-  const userMap = new Map((users ?? []).map((u) => [u.userId, u.name || u.email]))
-  if (currentUser) userMap.set(currentUser.userId, currentUser.name || currentUser.email)
+  // Management count includes the OWNER so the Management pill matches
+  // the scope filter above (OWNER + ADMIN). Total reflects the whole
+  // workspace — never zero while the owner is logged in.
+  const adminCount = (users ?? []).filter(
+    (u) => u.systemRole === 'ADMIN' || u.systemRole === 'OWNER',
+  ).length
+  const memberCount = (users ?? []).filter((u) => u.systemRole === 'MEMBER').length
+  const onlineCount = (users ?? []).filter((u) =>
+    onlineUserIds.has(u.userId)
+  ).length
+  const totalCount = (users ?? []).length
 
-  // Filter users by role groups
-  const adminsOnly = (users ?? []).filter((u) => u.systemRole === 'ADMIN')
-  const members = (users ?? []).filter((u) => u.systemRole === 'MEMBER')
+  // Filter + sort
+  const displayedUsers = useMemo(() => {
+    let list = allVisibleUsers
 
-  const rawDisplayedUsers = isTopTier
-    ? (activeTab === 'ADMIN' ? adminsOnly : members)
-    : members
+    if (deptFilter !== 'ALL') {
+      list = list.filter(
+        (u) => (u.department || 'Unassigned') === deptFilter
+      )
+    }
 
-  const deptFiltered = deptFilter === 'ALL'
-    ? rawDisplayedUsers
-    : rawDisplayedUsers.filter((u) => (u.department || '').toLowerCase() === deptFilter.toLowerCase())
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(
+        (u) =>
+          (u.name || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q) ||
+          (u.designation || '').toLowerCase().includes(q) ||
+          (u.department || '').toLowerCase().includes(q)
+      )
+    }
 
-  const searched = searchQuery.trim()
-    ? deptFiltered.filter((u) => {
-        const q = searchQuery.toLowerCase()
-        return (u.name || '').toLowerCase().includes(q)
-          || (u.email || '').toLowerCase().includes(q)
-          || (u.designation || '').toLowerCase().includes(q)
-          || (u.department || '').toLowerCase().includes(q)
-      })
-    : deptFiltered
+    return [...list].sort((a, b) => {
+      if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '')
+      if (sortBy === 'role')
+        return (a.systemRole || '').localeCompare(b.systemRole || '')
+      if (sortBy === 'department')
+        return (a.department || '').localeCompare(b.department || '')
+      if (sortBy === 'joined')
+        return (
+          new Date(b.createdAt || 0).getTime() -
+          new Date(a.createdAt || 0).getTime()
+        )
+      return 0
+    })
+  }, [allVisibleUsers, deptFilter, searchQuery, sortBy])
 
-  const displayedUsers = [...searched].sort((a, b) => {
-    if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '')
-    if (sortBy === 'role') return (a.systemRole || '').localeCompare(b.systemRole || '')
-    if (sortBy === 'department') return (a.department || '').localeCompare(b.department || '')
-    if (sortBy === 'joined') return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    return 0
-  })
+  const canClear = !!searchQuery || deptFilter !== 'ALL'
 
-  const onlineCount = (users ?? []).filter(u => onlineUserIds.has(u.userId)).length
-
-  // CSV export
   const exportUsersCSV = () => {
-    const header = ['Name', 'Email', 'Employee ID', 'Role', 'Department', 'Designation', 'Joined']
-    const rows = displayedUsers.map(u => [u.name || '', u.email, u.employeeId || '', u.systemRole, u.department || '', u.designation || '', u.createdAt ? new Date(u.createdAt).toLocaleDateString() : ''])
-    const csv = [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const header = [
+      'Name',
+      'Email',
+      'Employee ID',
+      'Role',
+      'Department',
+      'Designation',
+      'Joined',
+    ]
+    const rows = displayedUsers.map((u) => [
+      u.name || '',
+      u.email,
+      u.employeeId || '',
+      u.systemRole,
+      u.department || '',
+      u.designation || '',
+      u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '',
+    ])
+    const csv = [header, ...rows]
+      .map((r) =>
+        r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
+      )
+      .join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'users-export.csv'; a.click()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = buildCsvName('users-export', getLocalToday())
+    a.click()
   }
 
-  // Available roles for creation based on caller
-  const creatableRoles = isOwner
-    ? ['ADMIN', 'MEMBER']
-    : ['MEMBER']
+  const creatableRoles = isOwner ? ['ADMIN', 'MEMBER'] : ['MEMBER']
 
   const handleCreateUser = async () => {
     setError('')
@@ -145,10 +218,18 @@ export default function UsersPage() {
       setError('All fields are required')
       return
     }
+    // Normalize the email so "John@Example.com" and "john@example.com"
+    // never produce two separate user records. Keeps behavior consistent
+    // with handleSendInvite below, which already lowercases.
+    const normalizedEmail = newEmail.trim().toLowerCase()
+    if (!/.+@.+\..+/.test(normalizedEmail)) {
+      setError('Enter a valid email address')
+      return
+    }
     try {
       await createUserMutation.mutateAsync({
-        email: newEmail,
-        name: newName,
+        email: normalizedEmail,
+        name: newName.trim(),
         systemRole: newRole,
         department: newDepartment,
         dateOfJoining: newDateOfJoining,
@@ -159,255 +240,378 @@ export default function UsersPage() {
       setNewRole('MEMBER')
       setNewDepartment('')
       setNewDateOfJoining('')
+      toast.success('User created')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create user')
     }
   }
 
-  const handleDeleteUser = async () => {
-    if (!deleteTarget) return
+  const handleSendInvite = async () => {
+    setInviteError('')
+    const email = inviteEmail.trim().toLowerCase()
+    if (!email || !/.+@.+\..+/.test(email)) {
+      setInviteError('Enter a valid email address')
+      return
+    }
+    setInviteSending(true)
     try {
-      await deleteUserMutation.mutateAsync(deleteTarget.userId)
-      setDeleteTarget(null)
+      await orgsApi.sendInvite({ email, roleId: inviteRole })
+      toast.success(`Invitation sent to ${email}`)
+      setShowInvite(false)
+      setInviteEmail('')
+      setInviteRole('member')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to delete user')
+      setInviteError(err instanceof Error ? err.message : 'Failed to send invite')
+    } finally {
+      setInviteSending(false)
+    }
+  }
+
+  const handleDelete = async (u: User) => {
+    // Short-circuit self-delete — the backend will reject it anyway, but
+    // a toast is friendlier than a 403 and avoids a confirm-dialog dance.
+    if (u.userId === currentUser?.userId) {
+      toast.error("You can't delete your own account.")
+      return
+    }
+    if (u.systemRole === 'OWNER') {
+      toast.error("The Owner account can't be deleted from this screen.")
+      return
+    }
+    const confirmed = await confirm({
+      title: `Delete ${u.name || u.email}?`,
+      description:
+        'This removes them from Cognito and all project memberships. This action cannot be undone.',
+      confirmLabel: 'Delete user',
+      variant: 'danger',
+    })
+    if (!confirmed) return
+    try {
+      await deleteUserMutation.mutateAsync(u.userId)
+      toast.success('User deleted')
+    } catch (err: unknown) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to delete user'
+      )
+    }
+  }
+
+  const handleResetMfa = async (u: User) => {
+    const confirmed = await confirm({
+      title: `Reset 2FA for ${u.name || u.email}?`,
+      description:
+        "Their TOTP authenticator will be disabled so they can sign in with password alone. They'll be prompted to re-enroll from their profile afterwards.",
+      confirmLabel: 'Reset 2FA',
+      variant: 'danger',
+    })
+    if (!confirmed) return
+    try {
+      const { resetUserMfa } = await import('@/lib/api/userApi')
+      await resetUserMfa(u.userId)
+      toast.success(`2FA reset for ${u.name || u.email}.`)
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to reset 2FA.',
+      )
     }
   }
 
   const handleRoleChange = async (userId: string, role: string) => {
     try {
       await updateRole.mutateAsync({ userId, systemRole: role })
-      setSelectedUser(null)
+      toast.success(`Role updated to ${role}`)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to update role')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to update role'
+      )
     }
   }
 
+  if (!systemPerms.canManageUsers) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <p className="text-muted-foreground">
+          You don&apos;t have permission to view this page.
+        </p>
+      </div>
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner />
+      </div>
+    )
+  }
+
+  // Surface API errors explicitly — previously the page rendered empty
+  // whenever /users failed, making "fetch broken" look like "no users".
+  if (usersError) {
+    return (
+      <div className="mx-auto w-full max-w-4xl py-10">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Failed to load users:{' '}
+            {usersError instanceof Error ? usersError.message : 'Unknown error'}
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  const userMap = new Map(
+    (users ?? []).map((u) => [u.userId, u.name || u.email])
+  )
+  if (currentUser)
+    userMap.set(currentUser.userId, currentUser.name || currentUser.email)
+
+  // Subtitle label matches the scope pill: "management" covers OWNER +
+  // ADMIN, "members" covers MEMBER. Plural-s handled for the 0/1 cases.
+  const pageDescription = isOwner
+    ? `${displayedUsers.length} ${scope === 'management' ? 'in management' : `member${displayedUsers.length === 1 ? '' : 's'}`}${onlineCount > 0 ? ` · ${onlineCount} online now` : ''}`
+    : `${displayedUsers.length} member${displayedUsers.length === 1 ? '' : 's'}${onlineCount > 0 ? ` · ${onlineCount} online now` : ''}`
+
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">
-            {isTopTier ? 'User Management' : 'Member Management'}
-          </h1>
-          <p className="text-[13px] text-gray-400 mt-0.5">
-            {displayedUsers.length} user{displayedUsers.length !== 1 ? 's' : ''}{onlineCount > 0 ? ` · ${onlineCount} online` : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={exportUsersCSV}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 transition-all">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            CSV
-          </button>
-          <button onClick={() => setShowAddUser(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-gray-800 transition-all shadow-sm">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-            Add {isTopTier ? 'User' : 'Member'}
-          </button>
-        </div>
-      </div>
+    <div className="flex w-full max-w-7xl flex-col gap-5 animate-fade-in">
+      <PageHeader
+        title={isOwner ? 'User Management' : 'Member Management'}
+        description={pageDescription}
+      />
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xl font-bold text-indigo-700 tabular-nums">{(users ?? []).filter(u => u.systemRole !== 'OWNER').length}</p>
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Total</p>
-        </div>
-        {isTopTier && (
-          <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-            <p className="text-xl font-bold text-violet-700 tabular-nums">{adminsOnly.length}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Management</p>
-          </div>
-        )}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xl font-bold text-blue-700 tabular-nums">{members.length}</p>
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Members</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <div className="flex items-center gap-1.5">
-            <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" /></span>
-            <p className="text-xl font-bold text-emerald-700 tabular-nums">{onlineCount}</p>
-          </div>
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Online Now</p>
-        </div>
-      </div>
+      <UserStatStrip
+        total={totalCount}
+        management={adminCount}
+        members={memberCount}
+        online={onlineCount}
+        showManagement={isOwner}
+      />
 
-      {/* Search + Sort + Department filter */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[180px] max-w-[300px]">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search users..."
-              className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-9 pr-3 py-2 text-[12px] text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:bg-white transition-all" />
-          </div>
-          <FilterSelect value={sortBy} onChange={v => setSortBy(v as SortOption)}
-            options={[{ value: 'name', label: 'Sort: Name' }, { value: 'role', label: 'Sort: Role' }, { value: 'department', label: 'Sort: Department' }, { value: 'joined', label: 'Sort: Newest' }]} />
-          <FilterSelect value={deptFilter} onChange={setDeptFilter} active={deptFilter !== 'ALL'}
-            options={[{ value: 'ALL', label: 'All Departments' }, ...Array.from(deptCounts.entries()).sort().map(([dept, count]) => ({ value: dept, label: `${dept} (${count})` }))]} />
-          {(searchQuery || deptFilter !== 'ALL') && (
-            <button onClick={() => { setSearchQuery(''); setDeptFilter('ALL') }} className="text-[11px] text-gray-400 hover:text-gray-600 font-medium">Clear</button>
-          )}
-        </div>
-      </div>
+      <UsersToolbar
+        search={searchQuery}
+        onSearchChange={setSearchQuery}
+        scope={scope}
+        onScopeChange={setScope}
+        showScopeToggle={isOwner}
+        managementCount={adminCount}
+        memberCount={memberCount}
+        deptFilter={deptFilter}
+        onDeptFilterChange={setDeptFilter}
+        departments={departments}
+        sort={sortBy}
+        onSortChange={setSortBy}
+        canClear={canClear}
+        onClear={() => {
+          setSearchQuery('')
+          setDeptFilter('ALL')
+        }}
+        onExportCSV={exportUsersCSV}
+        onAddUser={() => setShowAddUser(true)}
+        onInvite={isOwner ? () => setShowInvite(true) : undefined}
+        onBulkImport={isOwner ? () => setShowBulkImport(true) : undefined}
+        addLabel={isOwner ? 'Add user' : 'Add member'}
+      />
 
-      {/* Tabs (Owner only) */}
-      {isTopTier && (
-        <div className="flex gap-2 border-b border-gray-200 pb-0">
-          <button
-            onClick={() => setActiveTab('ADMIN')}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-              activeTab === 'ADMIN'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Management ({adminsOnly.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('MEMBER')}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-              activeTab === 'MEMBER'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            Members ({members.length})
-          </button>
+      {displayedUsers.length === 0 ? (
+        <EmptyState
+          icon={
+            <UsersIcon
+              className="h-7 w-7 text-muted-foreground/70"
+              strokeWidth={1.5}
+            />
+          }
+          title={canClear ? 'No users match your filters' : 'No users yet'}
+          description={
+            canClear
+              ? 'Try clearing filters or switching scope.'
+              : `Invite teammates by email, or create them directly from here.`
+          }
+          action={
+            !canClear ? (
+              <div className="flex gap-2">
+                <Button onClick={() => setShowAddUser(true)}>
+                  <UserPlus className="h-3.5 w-3.5" />
+                  {isOwner ? 'Add user' : 'Add member'}
+                </Button>
+                {isOwner && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowInvite(true)}
+                  >
+                    Send invite
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSearchQuery('')
+                  setDeptFilter('ALL')
+                }}
+              >
+                Clear filters
+              </Button>
+            )
+          }
+        />
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-card">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-border">
+              <thead className="bg-muted/30">
+                <tr>
+                  <Th>User</Th>
+                  <Th>Department</Th>
+                  <Th>Role</Th>
+                  <Th>Last seen</Th>
+                  <Th className="text-right">Actions</Th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60 bg-card stagger-up">
+                {displayedUsers.map((u) => {
+                  const att = attendanceByUserId.get(u.userId)
+                  const isOnline = onlineUserIds.has(u.userId)
+                  const canDelete =
+                    u.systemRole !== 'OWNER' &&
+                    u.userId !== currentUser?.userId &&
+                    (isOwner ||
+                      (currentUser?.systemRole === 'ADMIN' &&
+                        u.systemRole === 'MEMBER'))
+
+                  return (
+                    <tr
+                      key={u.userId}
+                      className="transition-colors hover:bg-muted/30"
+                    >
+                      <td className="whitespace-nowrap px-5 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setViewUser(u)}
+                          className="flex items-center gap-3 text-left"
+                        >
+                          <div className="relative">
+                            <Avatar
+                              url={u.avatarUrl}
+                              name={u.name || u.email}
+                              size="md"
+                            />
+                            {isOnline && (
+                              // Explicit size + direct fill — the old
+                              // wrapper inherited its box from <LiveDot>
+                              // whose `animate-ping` element perturbed
+                              // the bounding box, so the ring rendered
+                              // as a visible slash across the avatar
+                              // edge. A fixed-size circle + its own
+                              // background is reliable and cheap.
+                              <span
+                                aria-label="Online"
+                                className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-card"
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-foreground hover:text-primary">
+                              {u.name || 'Unnamed'}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {u.email}
+                              </span>
+                              {u.employeeId && (
+                                <span className="rounded bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">
+                                  {u.employeeId}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3">
+                        {u.department ? (
+                          <span className="inline-flex items-center rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700">
+                            {u.department}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3">
+                        <RoleDropdown
+                          role={u.systemRole}
+                          onChange={(r) => handleRoleChange(u.userId, r)}
+                          disabled={!isOwner || u.systemRole === 'OWNER'}
+                        />
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-xs">
+                        <LastSeenCell
+                          isOnline={isOnline}
+                          attendance={att}
+                          joinedAt={u.createdAt}
+                        />
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-right">
+                        <UserActionsMenu
+                          onViewProfile={() => setViewUser(u)}
+                          onViewProgress={() => setProgressUser(u.userId)}
+                          onDelete={canDelete ? () => handleDelete(u) : undefined}
+                          onResetMfa={
+                            isOwner && u.userId !== currentUser?.userId
+                              ? () => handleResetMfa(u)
+                              : undefined
+                          }
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      {/* User Table */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-100">
-          <thead className="bg-gray-50/60">
-            <tr>
-              <th className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-widest">User</th>
-              <th className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-widest">Department</th>
-              <th className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-widest">Role</th>
-              <th className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-widest">Created By</th>
-              <th className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-widest">Joined</th>
-              <th className="px-6 py-3 text-right text-[10px] font-bold text-gray-500 uppercase tracking-widest">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-50">
-            {displayedUsers.map((u) => (
-              <tr key={u.userId} className="hover:bg-gray-50/50 transition-colors">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center">
-                    <div className="relative">
-                      <Avatar url={u.avatarUrl} name={u.name || u.email} size="md" />
-                      {onlineUserIds.has(u.userId) && (
-                        <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white" />
-                      )}
-                    </div>
-                    <div className="ml-3">
-                      <button type="button" onClick={() => setViewUser(u)}
-                        className="text-[13px] font-semibold text-gray-800 hover:text-indigo-600 text-left transition-colors">
-                        {u.name || 'Unnamed'}
-                      </button>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-gray-400">{u.email}</span>
-                        {u.employeeId && (
-                          <span className="text-[9px] font-mono bg-gray-100 text-gray-500 px-1 py-0.5 rounded">{u.employeeId}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {(() => {
-                    return u.department ? (
-                      <span className="inline-flex items-center rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-medium text-teal-700">
-                        {u.department}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-gray-400">-</span>
-                    )
-                  })()}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <Badge className={ROLE_COLORS[u.systemRole] || ROLE_COLORS.MEMBER}>
-                    {u.systemRole}
-                  </Badge>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {u.createdBy ? (userMap.get(u.createdBy) || '—') : '—'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                  <div className="flex items-center justify-end gap-2">
-                    <Button variant="secondary" size="sm" onClick={() => setProgressUser(u.userId)}>
-                      Progress
-                    </Button>
-                    {isOwner && u.systemRole !== 'OWNER' && (
-                      <Button variant="secondary" size="sm" onClick={() => setSelectedUser(u)}>
-                        Role
-                      </Button>
-                    )}
-                    {u.systemRole !== 'OWNER' && u.userId !== currentUser?.userId && (
-                      (() => {
-                        const canDelete = currentUser?.systemRole === 'OWNER' || (currentUser?.systemRole === 'ADMIN' && u.systemRole === 'MEMBER')
-                        return canDelete ? (
-                          <Button variant="danger" size="sm" onClick={() => setDeleteTarget(u)}>
-                            Delete
-                          </Button>
-                        ) : null
-                      })()
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {displayedUsers.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-
-                  {isTopTier && activeTab === 'ADMIN'
-                    ? 'No admins found. Click "Add User" to create one.'
-                    : 'No members found. Click "Add Member" to create one.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
       {/* Add User Modal */}
-      <Modal isOpen={showAddUser} onClose={() => { setShowAddUser(false); setError('') }} title="Create New User">
+      <Modal
+        isOpen={showAddUser}
+        onClose={() => {
+          setShowAddUser(false)
+          setError('')
+        }}
+        title={isOwner ? 'Create new user' : 'Create new member'}
+      >
         <div className="space-y-4">
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-              {error}
-            </div>
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
+          <Input
+            label="Email"
+            type="text"
+            placeholder="user@example.com"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            autoComplete="new-email-address"
+            name="new-user-email-field"
+          />
+          <Input
+            label="Name"
+            type="text"
+            placeholder="Full name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            autoComplete="new-user-name"
+            name="new-user-name-field"
+          />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <Input
-              type="text"
-              placeholder="user@example.com"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              autoComplete="new-email-address"
-              name="new-user-email-field"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-            <Input
-              type="text"
-              placeholder="Full name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              autoComplete="new-user-name"
-              name="new-user-name-field"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+            <label className="mb-1.5 block text-sm font-semibold text-foreground">
+              Role
+            </label>
             <Select
               value={newRole}
               onChange={setNewRole}
@@ -415,21 +619,25 @@ export default function UsersPage() {
             />
           </div>
           <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
-              <Select
-                value={newDepartment}
-                onChange={setNewDepartment}
-                placeholder="Select Department"
-                options={[
-                  { value: 'Development', label: 'Development' },
-                  { value: 'Designing', label: 'Designing' },
-                  { value: 'Management', label: 'Management' },
-                  { value: 'Research', label: 'Research' },
-                ]}
-              />
+            <label className="mb-1.5 block text-sm font-semibold text-foreground">
+              Department
+            </label>
+            <Select
+              value={newDepartment}
+              onChange={setNewDepartment}
+              placeholder="Select department"
+              options={[
+                { value: 'Development', label: 'Development' },
+                { value: 'Designing', label: 'Designing' },
+                { value: 'Management', label: 'Management' },
+                { value: 'Research', label: 'Research' },
+              ]}
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Date of Joining</label>
+            <label className="mb-1.5 block text-sm font-semibold text-foreground">
+              Date of joining
+            </label>
             <DatePicker
               value={newDateOfJoining}
               onChange={setNewDateOfJoining}
@@ -438,240 +646,411 @@ export default function UsersPage() {
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => { setShowAddUser(false); setError(''); setNewDepartment('') }}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowAddUser(false)
+                setError('')
+                setNewDepartment('')
+              }}
+            >
               Cancel
             </Button>
             <Button
               variant="primary"
               onClick={handleCreateUser}
-              disabled={createUserMutation.isPending}
+              loading={createUserMutation.isPending}
             >
-              {createUserMutation.isPending ? 'Creating...' : 'Create User'}
+              {createUserMutation.isPending ? 'Creating...' : 'Create user'}
             </Button>
           </div>
         </div>
       </Modal>
 
-      {/* Delete Confirmation Modal */}
+      {/* Invite by email Modal */}
       <Modal
-        isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        title="Confirm Delete"
+        isOpen={showInvite}
+        onClose={() => {
+          setShowInvite(false)
+          setInviteError('')
+        }}
+        title="Invite teammate by email"
       >
         <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Are you sure you want to delete <span className="font-semibold">{deleteTarget?.name || deleteTarget?.email}</span>?
-            This will remove them from Cognito and all project memberships. This action cannot be undone.
+          {inviteError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{inviteError}</AlertDescription>
+            </Alert>
+          )}
+          <p className="text-sm text-muted-foreground">
+            They&apos;ll get an email link to choose their own password. They
+            fill in their own department and other profile details after
+            joining.
           </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
+          <Input
+            label="Email"
+            type="email"
+            placeholder="user@example.com"
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
+            autoComplete="off"
+          />
+          <div>
+            <label className="mb-1.5 block text-sm font-semibold text-foreground">
+              Role
+            </label>
+            <Select
+              value={inviteRole}
+              onChange={(v) => setInviteRole(v as 'admin' | 'member')}
+              options={[
+                { value: 'member', label: 'Member' },
+                { value: 'admin', label: 'Admin' },
+              ]}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowInvite(false)
+                setInviteError('')
+              }}
+            >
               Cancel
             </Button>
             <Button
-              variant="danger"
-              onClick={handleDeleteUser}
-              disabled={deleteUserMutation.isPending}
+              variant="primary"
+              onClick={handleSendInvite}
+              loading={inviteSending}
             >
-              {deleteUserMutation.isPending ? 'Deleting...' : 'Delete User'}
+              {inviteSending ? 'Sending...' : 'Send invite'}
             </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Role Change Modal */}
-      <Modal
-        isOpen={selectedUser !== null}
-        onClose={() => setSelectedUser(null)}
-        title={`Change Role`}
-        size="sm"
-      >
-        <div className="space-y-5">
-          <div className="flex items-center gap-3">
-            <Avatar url={selectedUser?.avatarUrl} name={selectedUser?.name || selectedUser?.email || ''} size="md" />
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{selectedUser?.name || selectedUser?.email}</p>
-              <p className="text-xs text-gray-400">Current: <Badge className={ROLE_COLORS[selectedUser?.systemRole ?? 'MEMBER']}>{selectedUser?.systemRole}</Badge></p>
-            </div>
-          </div>
-          <div>
-            <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Select new role</p>
-            <div className="grid grid-cols-2 gap-2">
-              {['ADMIN', 'MEMBER'].map((role) => {
-                const isActive = selectedUser?.systemRole === role
-                return (
-                  <button
-                    key={role}
-                    onClick={() => selectedUser && handleRoleChange(selectedUser.userId, role)}
-                    disabled={updateRole.isPending}
-                    className={`py-3 rounded-xl text-sm font-semibold border-2 transition-all duration-200 ${
-                      isActive
-                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                        : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    {role}
-                  </button>
-                )
-              })}
-            </div>
           </div>
         </div>
       </Modal>
 
       {/* Progress Modal */}
       {progressUser && (
-        <UserProgressModal userId={progressUser} onClose={() => setProgressUser(null)} />
+        <UserProgressModal
+          userId={progressUser}
+          onClose={() => setProgressUser(null)}
+        />
       )}
 
       {/* User Bio Modal */}
       <Modal
         isOpen={viewUser !== null}
         onClose={() => setViewUser(null)}
-        title={viewUser?.name || viewUser?.email || 'User Profile'}
+        title={viewUser?.name || viewUser?.email || 'User profile'}
       >
         {viewUser && (
-          <div className="space-y-5">
-            {/* Header */}
-            <div className="flex items-center gap-4">
-              <Avatar url={viewUser.avatarUrl} name={viewUser.name || viewUser.email} size="lg" />
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">{viewUser.name || 'Unnamed'}</h3>
-                <p className="text-sm text-gray-500">{viewUser.email}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <Badge className={ROLE_COLORS[viewUser.systemRole]}>{viewUser.systemRole}</Badge>
-                  {viewUser.employeeId && (
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-mono font-medium text-gray-700">
-                      {viewUser.employeeId}
-                    </span>
-                  )}
-                  {viewUser.designation && (
-                    <span className="text-xs text-gray-500">{viewUser.designation}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Bio */}
-            {viewUser.bio && (
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-1">About</p>
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{viewUser.bio}</p>
-              </div>
-            )}
-
-            {/* Day-Off Score — only for ADMIN and MEMBER */}
-            {viewUser.systemRole !== 'OWNER' && (() => {
-              const now = new Date()
-              const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-              const monthEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-31`
-              let daysOff = 0
-              for (const d of allDayOffs ?? []) {
-                if (d.userId !== viewUser.userId || d.status !== 'APPROVED') continue
-                const start = d.startDate.slice(0, 10)
-                const end = d.endDate.slice(0, 10)
-                if (start > monthEnd || end < monthStart) continue
-                const from = new Date(Math.max(new Date(start).getTime(), new Date(monthStart).getTime()))
-                const to = new Date(Math.min(new Date(end).getTime(), new Date(monthEnd).getTime()))
-                daysOff += Math.round((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)) + 1
-              }
-              const score = daysOff === 0 ? 100 : daysOff <= 2 ? 75 : daysOff <= 5 ? 50 : 25
-              const scoreColor = score === 100 ? 'text-emerald-600' : score >= 75 ? 'text-blue-600' : score >= 50 ? 'text-amber-600' : 'text-red-600'
-              const scoreBg = score === 100 ? 'bg-emerald-50 border-emerald-200' : score >= 75 ? 'bg-blue-50 border-blue-200' : score >= 50 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
-              const scoreLabel = score === 100 ? 'Excellent' : score >= 75 ? 'Good' : score >= 50 ? 'Average' : 'Low'
-              const monthName = now.toLocaleDateString('en-US', { month: 'long' })
-
-              return (
-                <div className={`rounded-xl border p-3.5 ${scoreBg}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Day-Off Score · {monthName}</p>
-                      <div className="flex items-center gap-2">
-                        <span className={`text-2xl font-bold tabular-nums ${scoreColor}`}>{score}</span>
-                        <span className={`text-[11px] font-semibold ${scoreColor}`}>{scoreLabel}</span>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[11px] text-gray-500">{daysOff} day{daysOff !== 1 ? 's' : ''} off</p>
-                    </div>
-                  </div>
-                </div>
-              )
-            })()}
-
-            {/* Details */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-xs text-gray-400 mb-0.5">Phone</p>
-                <p className="text-sm font-medium text-gray-900">{viewUser.phone || '-'}</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-xs text-gray-400 mb-0.5">Department</p>
-                <p className="text-sm font-medium text-gray-900">{viewUser.department || '-'}</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-xs text-gray-400 mb-0.5">Location</p>
-                <p className="text-sm font-medium text-gray-900">{viewUser.location || '-'}</p>
-              </div>
-              {viewUser.dateOfBirth && (
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-0.5">Date of Birth</p>
-                  <p className="text-sm font-medium text-gray-900">{new Date(viewUser.dateOfBirth + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                </div>
-              )}
-              {viewUser.collegeName && (
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-0.5">College</p>
-                  <p className="text-sm font-medium text-gray-900">{viewUser.collegeName}</p>
-                </div>
-              )}
-              {viewUser.areaOfInterest && (
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-0.5">Area of Interest</p>
-                  <p className="text-sm font-medium text-gray-900">{viewUser.areaOfInterest}</p>
-                </div>
-              )}
-              {viewUser.hobby && (
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <p className="text-xs text-gray-400 mb-0.5">Hobby</p>
-                  <p className="text-sm font-medium text-gray-900">{viewUser.hobby}</p>
-                </div>
-              )}
-              <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-xs text-gray-400 mb-0.5">Joined</p>
-                <p className="text-sm font-medium text-gray-900">
-                  {viewUser.createdAt ? new Date(viewUser.createdAt).toLocaleDateString() : '-'}
-                </p>
-              </div>
-            </div>
-
-            {/* Skills */}
-            {viewUser.skills && viewUser.skills.length > 0 && (
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wider text-gray-400 mb-2">Skills</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {viewUser.skills.map((skill) => (
-                    <span key={skill} className="inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
-                      {skill}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Created By */}
-            {viewUser.createdBy && (
-              <div className="text-xs text-gray-400">
-                Created by {userMap.get(viewUser.createdBy) || viewUser.createdBy}
-              </div>
-            )}
-          </div>
+          <UserBioContent
+            viewUser={viewUser}
+            allDayOffs={allDayOffs ?? []}
+            userMap={userMap}
+          />
         )}
       </Modal>
+
+      <BulkImportUsersModal
+        open={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        onComplete={() => {
+          // Trigger a user-list refetch so the newly-created rows show
+          // up in the table without a manual reload.
+          void queryClient.invalidateQueries({ queryKey: ['users'] })
+        }}
+      />
     </div>
   )
 }
 
-function UserProgressModal({ userId, onClose }: { userId: string; onClose: () => void }) {
+/* ─── Helpers ─── */
+
+function Th({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <th
+      className={`px-5 py-3 text-left text-[10px] font-bold uppercase tracking-widest text-muted-foreground ${className}`}
+    >
+      {children}
+    </th>
+  )
+}
+
+function LastSeenCell({
+  isOnline,
+  attendance,
+  joinedAt,
+}: {
+  isOnline: boolean
+  attendance?: Attendance
+  joinedAt?: string
+}) {
+  if (isOnline && attendance?.currentSignInAt) {
+    const elapsed = Math.max(
+      0,
+      (Date.now() - new Date(attendance.currentSignInAt).getTime()) / 60000
+    )
+    const label =
+      elapsed < 60
+        ? `${Math.floor(elapsed)}m`
+        : `${Math.floor(elapsed / 60)}h ${Math.floor(elapsed % 60)}m`
+    return (
+      <span className="inline-flex items-center gap-1.5 text-emerald-700">
+        <LiveDot size="xs" />
+        <span className="font-semibold">Active · {label}</span>
+      </span>
+    )
+  }
+  if (attendance && attendance.sessions.length > 0) {
+    const last = attendance.sessions[attendance.sessions.length - 1]
+    const t = last.signOutAt
+      ? new Date(last.signOutAt).toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '—'
+    return <span className="text-muted-foreground">Today · {t}</span>
+  }
+  if (joinedAt) {
+    return (
+      <span className="text-muted-foreground">
+        Joined{' '}
+        {new Date(joinedAt).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })}
+      </span>
+    )
+  }
+  return <span className="text-muted-foreground">—</span>
+}
+
+function UserBioContent({
+  viewUser,
+  allDayOffs,
+  userMap,
+}: {
+  viewUser: User
+  allDayOffs: { userId: string; status: string; startDate: string; endDate: string }[]
+  userMap: Map<string, string>
+}) {
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-4">
+        <Avatar
+          url={viewUser.avatarUrl}
+          name={viewUser.name || viewUser.email}
+          size="lg"
+        />
+        <div className="min-w-0">
+          <h3 className="truncate text-lg font-semibold text-foreground">
+            {viewUser.name || 'Unnamed'}
+          </h3>
+          <p className="truncate text-sm text-muted-foreground">
+            {viewUser.email}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <Badge className={ROLE_STYLES[viewUser.systemRole]}>
+              {viewUser.systemRole}
+            </Badge>
+            {viewUser.employeeId && (
+              <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 font-mono text-xs font-medium text-foreground/85">
+                {viewUser.employeeId}
+              </span>
+            )}
+            {viewUser.designation && (
+              <span className="text-xs text-muted-foreground">
+                {viewUser.designation}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {viewUser.bio && (
+        <div>
+          <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            About
+          </p>
+          <p className="whitespace-pre-wrap text-sm text-foreground/90">
+            {viewUser.bio}
+          </p>
+        </div>
+      )}
+
+      {/* Day-Off score */}
+      {viewUser.systemRole !== 'OWNER' &&
+        (() => {
+          const now = new Date()
+          const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+          const monthEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-31`
+          let daysOff = 0
+          for (const d of allDayOffs) {
+            if (d.userId !== viewUser.userId || d.status !== 'APPROVED') continue
+            const start = d.startDate.slice(0, 10)
+            const end = d.endDate.slice(0, 10)
+            if (start > monthEnd || end < monthStart) continue
+            const from = new Date(
+              Math.max(
+                new Date(start).getTime(),
+                new Date(monthStart).getTime()
+              )
+            )
+            const to = new Date(
+              Math.min(new Date(end).getTime(), new Date(monthEnd).getTime())
+            )
+            daysOff +=
+              Math.round(
+                (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)
+              ) + 1
+          }
+          const score =
+            daysOff === 0
+              ? 100
+              : daysOff <= 2
+                ? 75
+                : daysOff <= 5
+                  ? 50
+                  : 25
+          const tone =
+            score === 100
+              ? { c: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' }
+              : score >= 75
+                ? { c: 'text-blue-600', bg: 'bg-blue-50 border-blue-200' }
+                : score >= 50
+                  ? { c: 'text-amber-600', bg: 'bg-amber-50 border-amber-200' }
+                  : { c: 'text-red-600', bg: 'bg-red-50 border-red-200' }
+          const label =
+            score === 100
+              ? 'Excellent'
+              : score >= 75
+                ? 'Good'
+                : score >= 50
+                  ? 'Average'
+                  : 'Low'
+          const monthName = now.toLocaleDateString('en-US', { month: 'long' })
+
+          return (
+            <div className={`rounded-xl border p-3.5 ${tone.bg}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                    Day-off score · {monthName}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-2xl font-bold tabular-nums ${tone.c}`}
+                    >
+                      {score}
+                    </span>
+                    <span className={`text-[11px] font-semibold ${tone.c}`}>
+                      {label}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] text-muted-foreground">
+                    {daysOff} day{daysOff !== 1 ? 's' : ''} off
+                  </p>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+      {/* Details grid */}
+      <div className="grid grid-cols-2 gap-3 stagger-up">
+        <DetailTile label="Phone" value={viewUser.phone} />
+        <DetailTile label="Department" value={viewUser.department} />
+        <DetailTile label="Location" value={viewUser.location} />
+        {viewUser.dateOfBirth && (
+          <DetailTile
+            label="Date of birth"
+            value={new Date(
+              viewUser.dateOfBirth + 'T00:00:00'
+            ).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })}
+          />
+        )}
+        {viewUser.collegeName && (
+          <DetailTile label="College" value={viewUser.collegeName} />
+        )}
+        {viewUser.areaOfInterest && (
+          <DetailTile label="Area of interest" value={viewUser.areaOfInterest} />
+        )}
+        {viewUser.hobby && <DetailTile label="Hobby" value={viewUser.hobby} />}
+        <DetailTile
+          label="Joined"
+          value={
+            viewUser.createdAt
+              ? new Date(viewUser.createdAt).toLocaleDateString()
+              : undefined
+          }
+        />
+      </div>
+
+      {viewUser.skills && viewUser.skills.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Skills
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {viewUser.skills.map((skill) => (
+              <span
+                key={skill}
+                className="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+              >
+                {skill}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {viewUser.createdBy && (
+        <div className="text-xs text-muted-foreground">
+          Created by {userMap.get(viewUser.createdBy) || viewUser.createdBy}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DetailTile({
+  label,
+  value,
+}: {
+  label: string
+  value?: string | null
+}) {
+  return (
+    <div className="rounded-xl bg-muted/40 p-3">
+      <p className="mb-0.5 text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium text-foreground">{value || '—'}</p>
+    </div>
+  )
+}
+
+function UserProgressModal({
+  userId,
+  onClose,
+}: {
+  userId: string
+  onClose: () => void
+}) {
   const { data: progress, isLoading } = useUserProgress(userId)
 
   return (
@@ -679,61 +1058,132 @@ function UserProgressModal({ userId, onClose }: { userId: string; onClose: () =>
       isOpen={true}
       onClose={onClose}
       title={`Progress: ${progress?.user?.name || progress?.user?.email || 'Loading...'}`}
+      size="lg"
     >
       {isLoading ? (
-        <div className="flex justify-center py-8"><Spinner /></div>
+        <div className="flex justify-center py-8">
+          <Spinner />
+        </div>
       ) : progress ? (
         <div className="space-y-4">
-          <div className="grid grid-cols-4 gap-3">
-            <div className="bg-gray-50 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-gray-900">{progress.totalStats.total}</div>
-              <div className="text-xs text-gray-500">Total</div>
-            </div>
-            <div className="bg-yellow-50 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-yellow-600">{progress.totalStats.TODO}</div>
-              <div className="text-xs text-gray-500">To Do</div>
-            </div>
-            <div className="bg-blue-50 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-blue-600">{progress.totalStats.IN_PROGRESS}</div>
-              <div className="text-xs text-gray-500">In Progress</div>
-            </div>
-            <div className="bg-green-50 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-green-600">{progress.totalStats.DONE}</div>
-              <div className="text-xs text-gray-500">Done</div>
-            </div>
+          <div className="grid grid-cols-4 gap-3 stagger-up">
+            <ProgressStat
+              label="Total"
+              value={progress.totalStats.total}
+              accent="text-foreground"
+              tone="bg-muted/40"
+            />
+            <ProgressStat
+              label="To Do"
+              value={progress.totalStats.TODO}
+              accent="text-amber-700"
+              tone="bg-amber-50 border-amber-200"
+            />
+            <ProgressStat
+              label="In Progress"
+              value={progress.totalStats.IN_PROGRESS}
+              accent="text-blue-700"
+              tone="bg-blue-50 border-blue-200"
+            />
+            <ProgressStat
+              label="Done"
+              value={progress.totalStats.DONE}
+              accent="text-emerald-700"
+              tone="bg-emerald-50 border-emerald-200"
+            />
           </div>
 
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {progress.projects.map((project) => (
-              <div key={project.projectId} className="border rounded-lg p-3">
-                <h4 className="font-medium text-gray-900">{project.projectName}</h4>
-                <div className="flex gap-2 mt-2">
-                  <span className="text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded">{project.stats.TODO} To Do</span>
-                  <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">{project.stats.IN_PROGRESS} In Progress</span>
-                  <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">{project.stats.DONE} Done</span>
+          <div className="max-h-96 space-y-3 overflow-y-auto">
+            {progress.projects.map((project) => {
+              const total =
+                project.stats.TODO +
+                project.stats.IN_PROGRESS +
+                project.stats.DONE
+              const pct = total > 0 ? (project.stats.DONE / total) * 100 : 0
+              return (
+                <div
+                  key={project.projectId}
+                  className="rounded-xl border border-border p-4"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="truncate text-sm font-bold text-foreground">
+                      {project.projectName}
+                    </h4>
+                    <span className="shrink-0 text-xs font-bold tabular-nums text-muted-foreground">
+                      {project.stats.DONE}/{total} done
+                    </span>
+                  </div>
+                  <Progress value={pct} className="mb-2 h-1.5" />
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                      {project.stats.TODO} to do
+                    </span>
+                    <span className="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                      {project.stats.IN_PROGRESS} in progress
+                    </span>
+                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                      {project.stats.DONE} done
+                    </span>
+                  </div>
+                  {project.tasks.length > 0 && (
+                    <ul className="mt-2 space-y-1 border-t border-border/60 pt-2">
+                      {project.tasks.map((task) => (
+                        <li
+                          key={task.taskId}
+                          className="flex items-center justify-between text-xs"
+                        >
+                          <span className="truncate text-foreground/90">
+                            {task.title}
+                          </span>
+                          <span
+                            className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                              task.status === 'DONE'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : task.status === 'IN_PROGRESS'
+                                  ? 'bg-blue-50 text-blue-700'
+                                  : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {task.status.replace('_', ' ')}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                {project.tasks.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {project.tasks.map((task) => (
-                      <li key={task.taskId} className="text-sm text-gray-600 flex justify-between">
-                        <span>{task.title}</span>
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                          task.status === 'DONE' ? 'bg-green-100 text-green-700' :
-                          task.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700' :
-                          'bg-yellow-100 text-yellow-700'
-                        }`}>{task.status.replace('_', ' ')}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
+              )
+            })}
             {progress.projects.length === 0 && (
-              <p className="text-gray-500 text-center py-4">No tasks assigned to this user.</p>
+              <EmptyState
+                title="No tasks assigned"
+                description="This user hasn't been assigned to any tasks yet."
+                className="border-0"
+              />
             )}
           </div>
         </div>
       ) : null}
     </Modal>
+  )
+}
+
+function ProgressStat({
+  label,
+  value,
+  accent,
+  tone,
+}: {
+  label: string
+  value: number
+  accent: string
+  tone: string
+}) {
+  return (
+    <div className={`rounded-lg border border-transparent p-3 text-center ${tone}`}>
+      <div className={`text-2xl font-bold tabular-nums ${accent}`}>{value}</div>
+      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+    </div>
   )
 }

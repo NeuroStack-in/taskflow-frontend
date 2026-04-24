@@ -2,10 +2,19 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import {
+  ArrowRight,
+  BarChart3,
+  Clock,
+  KanbanSquare,
+  ShieldCheck,
+} from 'lucide-react'
 import { useAuth } from '@/lib/auth/AuthProvider'
 import { LoginForm } from '@/components/auth/LoginForm'
 import { Spinner } from '@/components/ui/Spinner'
 import { Logo } from '@/components/ui/Logo'
+import { Card } from '@/components/ui/Card'
 
 export default function LoginPage() {
   const { user, isLoading } = useAuth()
@@ -13,97 +22,167 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
+      if (user.emailVerified === false) {
+        router.replace('/verify-email')
+        return
+      }
       router.replace('/dashboard')
     }
   }, [user, isLoading, router])
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[var(--color-bg)] gap-4">
-        <Logo size="lg" />
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
+        <Logo size="lg" hideSubline />
         <Spinner size="md" />
-        <p className="text-[12px] text-gray-400 font-medium animate-pulse">Checking authentication...</p>
+        <p className="animate-pulse text-xs font-medium text-muted-foreground">
+          Checking authentication...
+        </p>
       </div>
     )
   }
 
   if (user) return null
 
+  const features = [
+    { name: 'Task pipelines', Icon: KanbanSquare },
+    { name: 'Live time tracking', Icon: Clock },
+    { name: 'Cross-project reports', Icon: BarChart3 },
+    { name: 'Role-based access', Icon: ShieldCheck },
+  ]
+
   return (
-    <div className="flex min-h-screen bg-white dark:bg-[#0f1117]">
-      {/* Left — branding panel */}
-      <div className="hidden lg:flex lg:w-[55%] relative overflow-hidden items-center justify-center p-16 bg-gradient-to-br from-indigo-50 via-white to-violet-50 dark:from-[#0f1117] dark:via-[#141625] dark:to-[#1a1040] border-r border-gray-200 dark:border-[#2a2d3a]">
-        {/* Floating shapes */}
-        <div className="absolute top-[10%] left-[15%] w-72 h-72 rounded-full bg-indigo-200/40 dark:bg-indigo-500/10 blur-3xl animate-float" />
-        <div className="absolute bottom-[15%] right-[10%] w-64 h-64 rounded-full bg-violet-200/40 dark:bg-violet-500/10 blur-3xl animate-float" style={{ animationDelay: '2s' }} />
-        <div className="absolute top-[45%] left-[55%] w-48 h-48 rounded-full bg-cyan-100/30 dark:bg-cyan-500/8 blur-3xl animate-float" style={{ animationDelay: '4s' }} />
+    <div className="flex min-h-screen bg-background">
+      {/* ─── Left — sophisticated dark brand panel ────────────────── */}
+      <div className="relative hidden w-[52%] flex-col justify-between overflow-hidden bg-[#0a0a14] p-12 text-white lg:flex xl:p-16">
+        {/* Single subtle colour wash in the top-right; no saturated fill */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-40 -top-40 h-[620px] w-[620px] rounded-full blur-3xl"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(99,102,241,0.28) 0%, rgba(99,102,241,0) 70%)',
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-32 -left-32 h-[520px] w-[520px] rounded-full blur-3xl"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(217,70,239,0.14) 0%, rgba(217,70,239,0) 70%)',
+          }}
+        />
 
-        {/* Dot grid */}
-        <div className="absolute inset-0 opacity-[0.06] dark:opacity-[0.04]" style={{
-          backgroundImage: `radial-gradient(circle, #6366f1 1px, transparent 1px)`,
-          backgroundSize: '32px 32px',
-        }} />
+        {/* Very fine grid — barely visible, adds texture without noise */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 opacity-[0.035]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
+            backgroundSize: '64px 64px',
+          }}
+        />
 
-        <div className="relative z-10 max-w-lg">
-          <Logo size="xl" className="mb-10" />
+        {/* Top edge highlight — quietly anchors the panel */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"
+        />
 
-          <h1 className="text-[42px] font-bold leading-[1.1] mb-5 text-gray-900 dark:text-white tracking-tight animate-fade-in">
-            Manage your team&apos;s work,{' '}
-            <span className="bg-gradient-to-r from-indigo-600 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent">
-              effortlessly.
-            </span>
-          </h1>
+        {/* Top row — logo */}
+        <div className="relative z-10">
+          <Logo size="lg" hideSubline onDark />
+        </div>
 
-          <p className="text-[15px] text-gray-500 dark:text-gray-400 leading-relaxed mb-10 animate-fade-in-delay-1">
-            Track projects, assign tasks, monitor time, and keep your entire team in sync — all in one place.
-          </p>
-
-          {/* Feature cards */}
-          <div className="grid grid-cols-2 gap-3 animate-fade-in-delay-2">
-            {[
-              { name: 'Task Pipeline', desc: 'Domain-specific workflows', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" /></svg> },
-              { name: 'Time Tracking', desc: 'Live session timer', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
-              { name: 'Reports & Analytics', desc: 'Attendance & progress', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg> },
-              { name: 'Role-Based Access', desc: '3-tier permission system', icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg> },
-            ].map((feature) => (
-              <div key={feature.name} className="flex items-start gap-3 px-4 py-3.5 rounded-xl bg-white dark:bg-white/[0.06] border border-gray-200 dark:border-white/[0.1] shadow-sm hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-500/30 transition-all duration-200">
-                <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 flex-shrink-0">
-                  <span className="text-indigo-600 dark:text-indigo-400">{feature.icon}</span>
-                </div>
-                <div>
-                  <p className="text-[13px] font-bold text-gray-800 dark:text-white/90">{feature.name}</p>
-                  <p className="text-[11px] text-gray-400 dark:text-white/40">{feature.desc}</p>
-                </div>
-              </div>
-            ))}
+        {/* Middle — editorial typography; no decorative gradient on text */}
+        <div className="relative z-10 flex max-w-lg flex-col gap-12">
+          <div>
+            <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/50">
+              Workspace login
+            </p>
+            <h1 className="animate-fade-in text-[48px] font-semibold leading-[1.05] tracking-tight text-white text-balance">
+              The operating system for teams that ship.
+            </h1>
+            <p className="mt-6 max-w-md animate-fade-in-delay-1 text-[15px] leading-relaxed text-white/65">
+              Projects, tasks, time, and daily reporting — consolidated into
+              a single workspace, built for accountability.
+            </p>
           </div>
 
-          {/* Attribution */}
-          <p className="mt-14 text-[11px] text-gray-400 dark:text-white/30 animate-fade-in-delay-3">
-            Powered by <span className="font-semibold text-gray-500 dark:text-white/50">NEUROSTACK</span>
-          </p>
+          {/* Feature rail — thin hairline chips, no heavy glass cards */}
+          <ul className="grid animate-fade-in-delay-2 grid-cols-2 gap-x-4 gap-y-3">
+            {features.map((f) => (
+              <li
+                key={f.name}
+                className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] ring-1 ring-inset ring-white/10">
+                  <f.Icon className="h-4 w-4 text-white/90" strokeWidth={1.8} />
+                </div>
+                <span className="text-[13px] font-semibold text-white/85">
+                  {f.name}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Bottom row — small, restrained */}
+        <div className="relative z-10 flex items-center justify-between text-[11px] text-white/50">
+          <span>© {new Date().getFullYear()} TaskFlow</span>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/privacy"
+              className="transition-colors hover:text-white/80"
+            >
+              Privacy
+            </Link>
+            <Link
+              href="/terms"
+              className="transition-colors hover:text-white/80"
+            >
+              Terms
+            </Link>
+            <Link
+              href="/security"
+              className="transition-colors hover:text-white/80"
+            >
+              Security
+            </Link>
+          </div>
         </div>
       </div>
 
-      {/* Right — login form */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12 bg-[var(--color-bg)]">
+      {/* ─── Right — clean light surface, quiet and crisp ─────────── */}
+      <div className="flex flex-1 items-center justify-center bg-background px-6 py-12">
         <div className="w-full max-w-sm animate-fade-in">
-          {/* Mobile logo */}
-          <div className="lg:hidden flex justify-center mb-8">
-            <Logo size="lg" />
+          {/* Mobile-only logo bar */}
+          <div className="mb-10 flex justify-center lg:hidden">
+            <Logo size="lg" hideSubline />
           </div>
 
-          <div className="mb-6">
+          <div className="mb-8">
             <NeedsPwHeading />
           </div>
 
-          <div className="bg-white dark:bg-[#1a1c25] rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-[#2a2d3a]">
+          <Card className="border-border/70 p-6 shadow-[0_4px_32px_-8px_rgba(10,10,30,0.08)]">
             <LoginForm />
-          </div>
+          </Card>
 
-          <p className="mt-6 text-center text-[10px] text-gray-400 dark:text-gray-500">
-            Powered by <span className="font-semibold text-gray-500 dark:text-gray-400">NEUROSTACK</span> · Secure login via AWS Cognito
-          </p>
+          <div className="mt-6 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-3 w-3" />
+              Secured by AWS Cognito
+            </span>
+            <Link
+              href="/signup"
+              className="group inline-flex items-center gap-1 font-semibold text-primary transition-colors hover:text-primary/80"
+            >
+              Create workspace
+              <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          </div>
         </div>
       </div>
     </div>
@@ -115,15 +194,23 @@ function NeedsPwHeading() {
   if (needsPasswordChange) {
     return (
       <>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Create Your Password</h2>
-        <p className="mt-1 text-[13px] text-gray-500 dark:text-gray-400">Please set a new password to continue</p>
+        <h2 className="text-3xl font-bold tracking-tight text-foreground">
+          Create your password
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Please set a new password to continue.
+        </p>
       </>
     )
   }
   return (
     <>
-      <h2 className="text-xl font-bold text-gray-900 dark:text-white">Welcome back</h2>
-      <p className="mt-1 text-[13px] text-gray-500 dark:text-gray-400">Sign in to continue to your workspace</p>
+      <h2 className="text-3xl font-bold tracking-tight text-foreground">
+        Welcome back
+      </h2>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Sign in to continue to your workspace.
+      </p>
     </>
   )
 }

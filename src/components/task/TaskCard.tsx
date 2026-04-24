@@ -2,7 +2,7 @@
 
 import type { Task, TaskStatus } from '@/types/task'
 import { isOverdue as checkOverdue } from '@/lib/utils/deadline'
-import { TASK_STATUS_LABEL } from '@/types/task'
+import { useFormat } from '@/lib/tenant/useFormat'
 
 interface TaskCardProps {
   task: Task
@@ -24,12 +24,10 @@ const PRIORITY_LABEL: Record<Task['priority'], string> = {
 
 export function TaskCard({ task, onClick, resolveName }: TaskCardProps) {
   const resolve = resolveName ?? ((id: string) => id)
+  const fmt = useFormat()
 
   const deadlineFormatted = task.deadline
-    ? new Date(task.deadline).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      })
+    ? fmt.date(task.deadline, { month: 'short', day: 'numeric' })
     : null
 
   const isOverdue = checkOverdue(task.deadline, task.status)
@@ -37,10 +35,10 @@ export function TaskCard({ task, onClick, resolveName }: TaskCardProps) {
   return (
     <button
       onClick={() => onClick(task)}
-      className="group w-full text-left rounded-lg border border-gray-100 bg-gray-50/50 p-3 hover:bg-white hover:border-gray-200 hover:shadow-sm transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      className="group w-full text-left rounded-lg border border-border bg-muted/30 p-3 hover:bg-card hover:border-border/80 hover:shadow-sm transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
     >
       {/* Title */}
-      <p className="text-[13px] font-medium text-gray-800 leading-snug line-clamp-2 group-hover:text-gray-950 transition-colors">
+      <p className="text-[13px] font-medium text-foreground/95 leading-snug line-clamp-2 group-hover:text-gray-950 transition-colors">
         {task.title}
       </p>
 
@@ -49,14 +47,14 @@ export function TaskCard({ task, onClick, resolveName }: TaskCardProps) {
         {/* Priority dot */}
         <span className="flex items-center gap-1" title={`${PRIORITY_LABEL[task.priority]} priority`}>
           <span className={`w-1.5 h-1.5 rounded-full ${PRIORITY_DOT[task.priority]}`} />
-          <span className="text-[10px] text-gray-400 font-medium">{PRIORITY_LABEL[task.priority]}</span>
+          <span className="text-[10px] text-muted-foreground/70 font-medium">{PRIORITY_LABEL[task.priority]}</span>
         </span>
 
         {/* Deadline */}
         {deadlineFormatted && (
           <>
             <span className="text-gray-200">|</span>
-            <span className={`text-[10px] font-medium ${isOverdue ? 'text-red-500' : 'text-gray-400'}`}>
+            <span className={`text-[10px] font-medium ${isOverdue ? 'text-red-500' : 'text-muted-foreground/70'}`}>
               {isOverdue && (
                 <svg className="w-3 h-3 inline mr-0.5 -mt-px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01" /></svg>
               )}
@@ -75,7 +73,7 @@ export function TaskCard({ task, onClick, resolveName }: TaskCardProps) {
             return (
               <span
                 key={userId}
-                className="inline-flex items-center justify-center w-5.5 h-5.5 rounded-full bg-gray-200 text-[9px] font-bold text-gray-600 ring-1 ring-white"
+                className="inline-flex items-center justify-center w-5.5 h-5.5 rounded-full bg-muted text-[9px] font-bold text-muted-foreground ring-1 ring-white"
                 title={name}
                 style={{ width: 22, height: 22 }}
               >
@@ -84,7 +82,7 @@ export function TaskCard({ task, onClick, resolveName }: TaskCardProps) {
             )
           })}
           {task.assignedTo.length > 3 && (
-            <span className="text-[10px] text-gray-400 font-medium ml-0.5">+{task.assignedTo.length - 3}</span>
+            <span className="text-[10px] text-muted-foreground/70 font-medium ml-0.5">+{task.assignedTo.length - 3}</span>
           )}
         </div>
       )}

@@ -37,8 +37,8 @@ const STEPS: WalkthroughStep[] = [
     icon: <svg className="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>,
   },
   {
-    title: 'Daily Task Updates',
-    description: 'At the end of your day, stop the desktop timer and submit a Task Update from your dashboard. It auto-generates a summary from your tracked sessions.',
+    title: 'Daily Updates',
+    description: 'At the end of your day, stop the desktop timer and submit a Daily Update from your dashboard. It auto-generates a summary from your tracked sessions.',
     icon: <svg className="w-8 h-8 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
   },
   {
@@ -110,11 +110,11 @@ export function Walkthrough() {
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
 
       {/* Card */}
-      <div className="relative bg-white dark:bg-[#191b24] rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700/50 w-full max-w-md overflow-hidden animate-fade-in-scale"
+      <div className="relative bg-card dark:bg-[#191b24] rounded-2xl shadow-2xl border border-border/80 dark:border-gray-700/50 w-full max-w-md overflow-hidden animate-fade-in-scale"
         style={{ animationDuration: '0.2s' }}>
 
         {/* Progress bar */}
-        <div className="h-1 bg-gray-100 dark:bg-gray-800">
+        <div className="h-1 bg-muted dark:bg-gray-800">
           <div className="h-full bg-indigo-500 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
         </div>
 
@@ -122,25 +122,25 @@ export function Walkthrough() {
         <div className="px-8 pt-8 pb-6">
           {/* Step indicator */}
           <div className="flex items-center justify-between mb-6">
-            <span className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 tabular-nums">
+            <span className="text-[11px] font-semibold text-muted-foreground/70 dark:text-muted-foreground tabular-nums">
               {step + 1} of {STEPS.length}
             </span>
             <button onClick={dismiss}
-              className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
+              className="text-[11px] font-semibold text-muted-foreground/70 hover:text-muted-foreground dark:hover:text-muted-foreground/50 transition-colors">
               Skip tour
             </button>
           </div>
 
           {/* Icon */}
-          <div className="w-16 h-16 rounded-2xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center mb-5 mx-auto">
+          <div className="w-16 h-16 rounded-2xl bg-muted/40 dark:bg-gray-800 flex items-center justify-center mb-5 mx-auto">
             {current.icon}
           </div>
 
           {/* Text */}
-          <h2 className="text-[18px] font-bold text-gray-900 dark:text-gray-100 text-center mb-2">
+          <h2 className="text-[18px] font-bold text-foreground dark:text-gray-100 text-center mb-2">
             {current.title}
           </h2>
-          <p className="text-[13px] text-gray-500 dark:text-gray-400 text-center leading-relaxed">
+          <p className="text-[13px] text-muted-foreground dark:text-muted-foreground/70 text-center leading-relaxed">
             {current.description}
           </p>
         </div>
@@ -149,7 +149,7 @@ export function Walkthrough() {
         <div className="flex items-center justify-center gap-1.5 pb-5">
           {STEPS.map((_, i) => (
             <button key={i} onClick={() => setStep(i)}
-              className={`rounded-full transition-all ${i === step ? 'w-6 h-2 bg-indigo-500' : 'w-2 h-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300'}`} />
+              className={`rounded-full transition-all ${i === step ? 'w-6 h-2 bg-indigo-500' : 'w-2 h-2 bg-muted dark:bg-gray-700 hover:bg-gray-300'}`} />
           ))}
         </div>
 
@@ -157,7 +157,7 @@ export function Walkthrough() {
         <div className="flex items-center justify-between px-8 pb-8">
           {!isFirst ? (
             <button onClick={prev}
-              className="text-[13px] font-semibold text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors">
+              className="text-[13px] font-semibold text-muted-foreground hover:text-foreground/85 dark:text-muted-foreground/70 dark:hover:text-gray-200 transition-colors">
               Back
             </button>
           ) : (
