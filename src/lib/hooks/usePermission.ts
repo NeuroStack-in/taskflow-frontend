@@ -58,8 +58,12 @@ export interface SystemPermissions {
  * `user.systemRole` against the fetched role records, falling back to
  * `null` when roles are still loading (caller decides whether to use
  * the hardcoded safety net).
+ *
+ * Exported so layout-level components (the sidebar, admin route
+ * guards) can filter a whole set of affordances with a single hook
+ * call instead of calling `useHasPermission` once per permission.
  */
-function useEffectivePermissions(): Set<string> | null {
+export function useEffectivePermissions(): Set<string> | null {
   const { user } = useAuth()
   const { roles, isLoading } = useRoles()
   return useMemo(() => {
