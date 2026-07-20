@@ -58,6 +58,12 @@ export function Select({
         <SelectPrimitive.Content
           position="popper"
           sideOffset={4}
+          // Content is Portal'd to <body>. Inside a modal Dialog, Radix's
+          // react-remove-scroll lock puts a non-passive wheel/touchmove
+          // blocker on `document` (bubble phase); stop these events here so
+          // they never reach it and the list scrolls. See ui/Popover.tsx.
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
           className={cn(
             'relative z-[9999] max-h-[300px] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-elevated',
             'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'

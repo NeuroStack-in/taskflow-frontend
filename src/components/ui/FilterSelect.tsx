@@ -59,6 +59,8 @@ export function FilterSelect({
 
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
           position="popper"
           sideOffset={4}
           className={cn(

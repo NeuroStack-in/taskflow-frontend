@@ -113,6 +113,8 @@ export function TimePicker({ value, onChange, placeholder = 'Select time', class
       {open && createPortal(
         <div
           data-timepicker-dropdown
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
           className="fixed z-[9999] pointer-events-auto w-[280px] bg-card rounded-2xl shadow-2xl ring-1 ring-border/60 p-4 animate-fade-in-scale"
           style={{ animationDuration: '0.12s', top: pos.top, left: pos.left }}
         >
