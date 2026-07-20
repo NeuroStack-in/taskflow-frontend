@@ -53,8 +53,13 @@ export function getUserProgress(userId: string): Promise<UserProgress> {
   return apiClient.get<UserProgress>(`/users/${userId}/progress`)
 }
 
-export function createUser(data: { email: string; name: string; systemRole: string; department: string; dateOfJoining?: string }): Promise<User> {
-  return apiClient.post<User>('/users', data)
+/** The create-user response is the User plus the one-time password the
+ *  backend generated. The OTP is the fallback when the welcome email
+ *  doesn't arrive (spam/dropped) — surface it so an admin can share it. */
+export type CreatedUser = User & { otp?: string }
+
+export function createUser(data: { email: string; name: string; systemRole: string; department: string; dateOfJoining?: string }): Promise<CreatedUser> {
+  return apiClient.post<CreatedUser>('/users', data)
 }
 
 export interface BulkUserRow {

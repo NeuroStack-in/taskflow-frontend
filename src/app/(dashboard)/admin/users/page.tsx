@@ -94,6 +94,10 @@ export default function UsersPage() {
   const [newRole, setNewRole] = useState('MEMBER')
   const [newDepartment, setNewDepartment] = useState('')
   const [newDateOfJoining, setNewDateOfJoining] = useState('')
+  // Holds the created user's credentials so the admin can share the
+  // temp password directly — the welcome email is unreliable (Gmail SMTP
+  // spam-filters/drops it), so the OTP must be visible in-app.
+  const [createdCreds, setCreatedCreds] = useState<{ email: string; otp: string } | null>(null)
 
   // Department choices for the Add user form — sourced from the OWNER-
   // managed catalog in /settings/organization. Falls back to an empty
@@ -305,23 +309,35 @@ export default function UsersPage() {
       return
     }
     try {
-      await createUserMutation.mutateAsync({
+      const created = await createUserMutation.mutateAsync({
         email: normalizedEmail,
         name: newName.trim(),
         systemRole: newRole,
         department: newDepartment,
         dateOfJoining: newDateOfJoining,
       })
-      setShowAddUser(false)
+      // Clear the form but KEEP the modal open to reveal the temp password.
       setNewEmail('')
       setNewName('')
       setNewRole('MEMBER')
       setNewDepartment('')
       setNewDateOfJoining('')
       toast.success('User created')
+      if (created.otp) {
+        setCreatedCreds({ email: normalizedEmail, otp: created.otp })
+      } else {
+        setShowAddUser(false)
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create user')
     }
+  }
+
+  const closeAddUser = () => {
+    setShowAddUser(false)
+    setError('')
+    setNewDepartment('')
+    setCreatedCreds(null)
   }
 
   const handleDelete = async (u: User) => {
@@ -638,12 +654,60 @@ export default function UsersPage() {
       {/* Add User Modal */}
       <Modal
         isOpen={showAddUser}
-        onClose={() => {
-          setShowAddUser(false)
-          setError('')
-        }}
-        title={isOwner ? 'Create new user' : 'Create new member'}
+        onClose={closeAddUser}
+        title={
+          createdCreds
+            ? 'User created'
+            : isOwner
+              ? 'Create new user'
+              : 'Create new member'
+        }
       >
+        {createdCreds ? (
+          <div className="space-y-4">
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                A welcome email was sent, but delivery isn&apos;t guaranteed
+                (it can land in spam). Share this temporary password directly
+                so they can sign in — they&apos;ll set their own on first login.
+              </AlertDescription>
+            </Alert>
+            <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email</p>
+                <p className="font-mono text-sm text-foreground">{createdCreds.email}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Temporary password</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-lg border border-border bg-card px-3 py-2 font-mono text-sm text-foreground select-all">
+                    {createdCreds.otp}
+                  </code>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(`Email: ${createdCreds.email}\nTemporary password: ${createdCreds.otp}`)
+                        .then(() => toast.success('Credentials copied'))
+                        .catch(() => toast.error('Copy failed — select the text manually'))
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setCreatedCreds(null)}>
+                Create another
+              </Button>
+              <Button variant="primary" onClick={closeAddUser}>
+                Done
+              </Button>
+            </div>
+          </div>
+        ) : (
         <div className="space-y-4">
           {error && (
             <Alert variant="destructive">
@@ -709,14 +773,7 @@ export default function UsersPage() {
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setShowAddUser(false)
-                setError('')
-                setNewDepartment('')
-              }}
-            >
+            <Button variant="secondary" onClick={closeAddUser}>
               Cancel
             </Button>
             <Button
@@ -728,6 +785,7 @@ export default function UsersPage() {
             </Button>
           </div>
         </div>
+        )}
       </Modal>
 
       {/* Progress Modal */}
